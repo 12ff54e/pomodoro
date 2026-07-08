@@ -27,6 +27,6 @@ jobs:
 
       - name: Build (release)
         run: |
-          export PATH="${{ steps.msys2.outputs.msys2-location }}/mingw64/bin:$PATH"
+          $env:PATH = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin;$env:PATH"
           cd src-tauri
           cargo build --release

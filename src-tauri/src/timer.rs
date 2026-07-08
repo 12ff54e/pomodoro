@@ -53,15 +53,25 @@ pub struct PomodoroState {
 // Persistence (JSON file next to the executable)
 // ---------------------------------------------------------------------------
 
-/// Full path to the settings file: `<exe-dir>/pomodoro.json`.
-fn settings_path() -> PathBuf {
+fn exe_dir() -> PathBuf {
     let exe = std::env::current_exe().unwrap_or_default();
     exe.parent()
         .unwrap_or_else(|| std::path::Path::new("."))
-        .join("pomodoro.json")
+        .to_path_buf()
 }
 
-/// Shape of the persisted JSON file.
+/// `<exe-dir>/pomodoro.json` — small, fast to load.
+fn settings_path() -> PathBuf {
+    exe_dir().join("pomodoro.json")
+}
+
+/// `<exe-dir>/pomodoro_daily.json` — grows over time, loaded separately.
+fn daily_path() -> PathBuf {
+    exe_dir().join("pomodoro_daily.json")
+}
+
+// ---- Settings file (tiny, always loaded as a whole) ----
+
 #[derive(Debug, Serialize, Deserialize)]
 struct SettingsFile {
     #[serde(default = "default_work")]
@@ -70,9 +80,6 @@ struct SettingsFile {
     #[serde(default = "default_break")]
     #[serde(rename = "breakMinutes")]
     break_minutes: u64,
-    #[serde(default)]
-    #[serde(rename = "dailyTotals")]
-    daily_totals: BTreeMap<String, u64>,
 }
 
 fn default_work() -> u64 {
@@ -87,14 +94,12 @@ impl Default for SettingsFile {
         Self {
             work_minutes: 25,
             break_minutes: 5,
-            daily_totals: BTreeMap::new(),
         }
     }
 }
 
 fn load_settings_file() -> SettingsFile {
-    let path = settings_path();
-    match std::fs::read_to_string(&path) {
+    match std::fs::read_to_string(settings_path()) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
         Err(_) => SettingsFile::default(),
     }
@@ -103,6 +108,21 @@ fn load_settings_file() -> SettingsFile {
 fn save_settings_file(settings: &SettingsFile) {
     if let Ok(json) = serde_json::to_string_pretty(settings) {
         let _ = std::fs::write(settings_path(), json);
+    }
+}
+
+// ---- Daily totals file (separate, can grow large) ----
+
+fn load_daily_totals() -> BTreeMap<String, u64> {
+    match std::fs::read_to_string(daily_path()) {
+        Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+        Err(_) => BTreeMap::new(),
+    }
+}
+
+fn save_daily_totals(totals: &BTreeMap<String, u64>) {
+    if let Ok(json) = serde_json::to_string_pretty(totals) {
+        let _ = std::fs::write(daily_path(), json);
     }
 }
 
@@ -143,32 +163,22 @@ pub fn load_settings() -> PomodoroSettings {
     }
 }
 
-/// Reads today's total work seconds from the settings file.
+/// Reads today's total work seconds from the daily file.
 pub fn load_daily_total() -> u64 {
-    let settings = load_settings_file();
+    let totals = load_daily_totals();
     let today = today_string();
-    settings
-        .daily_totals
-        .get(&today)
-        .copied()
-        .unwrap_or(0)
+    totals.get(&today).copied().unwrap_or(0)
 }
 
-/// Adds `seconds` of work time to today's entry in the settings file.
+/// Adds `seconds` of work time to today's entry in the daily file.
 /// Returns the new daily total.
 fn add_daily_work_seconds(seconds: u64) -> u64 {
-    let mut settings = load_settings_file();
+    let mut totals = load_daily_totals();
     let today = today_string();
-    let prev = settings
-        .daily_totals
-        .get(&today)
-        .copied()
-        .unwrap_or(0);
+    let prev = totals.get(&today).copied().unwrap_or(0);
     let new_total = prev + seconds;
-    settings
-        .daily_totals
-        .insert(today, new_total);
-    save_settings_file(&settings);
+    totals.insert(today, new_total);
+    save_daily_totals(&totals);
     new_total
 }
 

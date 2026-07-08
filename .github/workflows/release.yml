@@ -13,6 +13,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup MSYS2 (MinGW-w64 toolchain)
+        id: msys2
         uses: msys2/setup-msys2@v2
         with:
           msystem: mingw64
@@ -23,32 +24,44 @@ jobs:
       - name: Install Rust GNU toolchain
         run: rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
 
-      - name: Build (release)
-        shell: msys2 {0}
+      - name: Verify tag matches Cargo.toml version
         run: |
+          $tag_version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $cargo_version = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"(.+)"').Matches.Groups[1].Value
+          if ($tag_version -ne $cargo_version) {
+            Write-Error "Tag version ($tag_version) does not match Cargo.toml version ($cargo_version)"
+            exit 1
+          }
+          Write-Host "Tag version $tag_version matches Cargo.toml"
+
+      - name: Build (release)
+        run: |
+          $env:PATH = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin;$env:PATH"
           cd src-tauri
           cargo build --release
 
       - name: Package release
-        shell: msys2 {0}
         run: |
-          VERSION=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          PKG_DIR="target/release/pomodoro-v$VERSION"
-          ZIP_FILE="pomodoro-v$VERSION.zip"
+          $env:PATH = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin;$env:PATH"
+          $cargo_version = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"(.+)"').Matches.Groups[1].Value
+          $pkg_dir = "target\release\pomodoro-v$cargo_version"
+          $zip_file = "pomodoro-v$cargo_version.zip"
 
-          rm -rf "$PKG_DIR" "$ZIP_FILE"
-          mkdir -p "$PKG_DIR"
-          cp src-tauri/target/release/pomodoro.exe "$PKG_DIR/"
-          cp src-tauri/target/release/WebView2Loader.dll "$PKG_DIR/"
+          if (Test-Path $pkg_dir) { Remove-Item -Recurse -Force $pkg_dir }
+          if (Test-Path $zip_file) { Remove-Item -Force $zip_file }
+          New-Item -ItemType Directory -Force -Path $pkg_dir | Out-Null
 
-          echo "Package contents:"
-          ls -lh "$PKG_DIR"/
+          Copy-Item src-tauri\target\release\pomodoro.exe "$pkg_dir\"
+          Copy-Item src-tauri\target\release\WebView2Loader.dll "$pkg_dir\"
 
-          cd target/release
-          zip -r "../../$ZIP_FILE" "pomodoro-v$VERSION"
+          Write-Host "Package contents:"
+          Get-ChildItem $pkg_dir | ForEach-Object { Write-Host "$($_.Length) $($_.Name)" }
 
-          echo "zip=$ZIP_FILE" >> "$GITHUB_ENV"
-          echo "version=$VERSION" >> "$GITHUB_ENV"
+          Set-Location target\release
+          Compress-Archive -Path "pomodoro-v$cargo_version" -DestinationPath "..\..\$zip_file"
+
+          "zip=$zip_file" | Out-File -Append -Encoding ascii $env:GITHUB_ENV
+          "version=$cargo_version" | Out-File -Append -Encoding ascii $env:GITHUB_ENV
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

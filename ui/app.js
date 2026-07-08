@@ -1,7 +1,36 @@
 // ---- State (mirrored from Rust, updated by events) ----
 let currentPhase = 'work';
 let isRunning = false;
+let lastPhase = 'work';
 let settings = { workMinutes: 25, breakMinutes: 5 };
+
+// ---- Audio context (lazy, created on first beep) ----
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  return audioCtx;
+}
+
+/** Play a simple beep: frequency in Hz, duration in ms, repeat count. */
+function beep(freq, durationMs, count = 1) {
+  const ctx = getAudioCtx();
+  let delay = 0;
+  for (let i = 0; i < count; i++) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.3, ctx.currentTime + delay);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + durationMs / 1000);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(ctx.currentTime + delay);
+    osc.stop(ctx.currentTime + delay + durationMs / 1000 + 0.05);
+    delay += durationMs / 1000 + 0.15; // gap between beeps
+  }
+}
 
 // ---- DOM references ----
 const timerEl = document.getElementById('timer');
@@ -35,6 +64,18 @@ function formatDailyTotal(totalSeconds) {
 }
 
 function render(tick) {
+  // Detect phase transitions and play sound.
+  if (tick.phase !== lastPhase) {
+    if (tick.phase === 'break') {
+      // Work done — 3 short high beeps.
+      beep(880, 150, 3);
+    } else {
+      // Break done — 1 longer lower beep.
+      beep(660, 400, 1);
+    }
+    lastPhase = tick.phase;
+  }
+
   currentPhase = tick.phase;
   isRunning = tick.running;
 

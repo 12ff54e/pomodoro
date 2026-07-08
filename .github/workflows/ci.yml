@@ -22,6 +22,7 @@ jobs:
             mingw-w64-x86_64-gcc
 
       - name: Install Rust GNU toolchain
+        shell: msys2 {0}
         run: rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
 
       - name: Build (release)

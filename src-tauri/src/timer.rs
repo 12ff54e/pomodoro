@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::SystemTime;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_store::StoreExt;
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -49,6 +50,63 @@ pub struct PomodoroState {
 }
 
 // ---------------------------------------------------------------------------
+// Persistence (JSON file next to the executable)
+// ---------------------------------------------------------------------------
+
+/// Full path to the settings file: `<exe-dir>/pomodoro.json`.
+fn settings_path() -> PathBuf {
+    let exe = std::env::current_exe().unwrap_or_default();
+    exe.parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("pomodoro.json")
+}
+
+/// Shape of the persisted JSON file.
+#[derive(Debug, Serialize, Deserialize)]
+struct SettingsFile {
+    #[serde(default = "default_work")]
+    #[serde(rename = "workMinutes")]
+    work_minutes: u64,
+    #[serde(default = "default_break")]
+    #[serde(rename = "breakMinutes")]
+    break_minutes: u64,
+    #[serde(default)]
+    #[serde(rename = "dailyTotals")]
+    daily_totals: BTreeMap<String, u64>,
+}
+
+fn default_work() -> u64 {
+    25
+}
+fn default_break() -> u64 {
+    5
+}
+
+impl Default for SettingsFile {
+    fn default() -> Self {
+        Self {
+            work_minutes: 25,
+            break_minutes: 5,
+            daily_totals: BTreeMap::new(),
+        }
+    }
+}
+
+fn load_settings_file() -> SettingsFile {
+    let path = settings_path();
+    match std::fs::read_to_string(&path) {
+        Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+        Err(_) => SettingsFile::default(),
+    }
+}
+
+fn save_settings_file(settings: &SettingsFile) {
+    if let Ok(json) = serde_json::to_string_pretty(settings) {
+        let _ = std::fs::write(settings_path(), json);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -76,57 +134,42 @@ fn today_string() -> String {
     format!("{:04}-{:02}-{:02}", y, m, d)
 }
 
-/// Reads (or creates) the daily-totals map from the store and returns
-/// today's total seconds.
-fn load_daily_total(app: &AppHandle) -> u64 {
-    if let Ok(store) = app.store("settings.json") {
-        let totals = store
-            .get("dailyTotals")
-            .and_then(|v| {
-                if let serde_json::Value::Object(map) = v {
-                    Some(map)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_default();
-        let today = today_string();
-        totals
-            .get(&today)
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0)
-    } else {
-        0
+/// Load settings (work/break minutes) from the settings file.
+pub fn load_settings() -> PomodoroSettings {
+    let file = load_settings_file();
+    PomodoroSettings {
+        work_minutes: file.work_minutes,
+        break_minutes: file.break_minutes,
     }
 }
 
-/// Adds `seconds` of work time to today's entry in the persisted store.
+/// Reads today's total work seconds from the settings file.
+pub fn load_daily_total() -> u64 {
+    let settings = load_settings_file();
+    let today = today_string();
+    settings
+        .daily_totals
+        .get(&today)
+        .copied()
+        .unwrap_or(0)
+}
+
+/// Adds `seconds` of work time to today's entry in the settings file.
 /// Returns the new daily total.
-fn add_daily_work_seconds(app: &AppHandle, seconds: u64) -> u64 {
-    if let Ok(store) = app.store("settings.json") {
-        let mut totals = store
-            .get("dailyTotals")
-            .and_then(|v| {
-                if let serde_json::Value::Object(map) = v {
-                    Some(map)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_default();
-        let today = today_string();
-        let prev = totals
-            .get(&today)
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let new_total = prev + seconds;
-        totals.insert(today, serde_json::Value::Number(new_total.into()));
-        let _ = store.set("dailyTotals", serde_json::Value::Object(totals));
-        let _ = store.save();
-        new_total
-    } else {
-        0
-    }
+fn add_daily_work_seconds(seconds: u64) -> u64 {
+    let mut settings = load_settings_file();
+    let today = today_string();
+    let prev = settings
+        .daily_totals
+        .get(&today)
+        .copied()
+        .unwrap_or(0);
+    let new_total = prev + seconds;
+    settings
+        .daily_totals
+        .insert(today, new_total);
+    save_settings_file(&settings);
+    new_total
 }
 
 // ---------------------------------------------------------------------------
@@ -145,8 +188,8 @@ pub fn get_state(state: State<'_, Mutex<PomodoroState>>) -> TimerTick {
 }
 
 #[tauri::command]
-pub fn get_daily_total(app: AppHandle) -> u64 {
-    load_daily_total(&app)
+pub fn get_daily_total() -> u64 {
+    load_daily_total()
 }
 
 #[tauri::command]
@@ -204,11 +247,11 @@ pub fn start_timer(
 
             // Record completed work (outside the lock to avoid deadlock).
             if let Some(secs) = work_completed {
-                add_daily_work_seconds(&app, secs);
+                add_daily_work_seconds(secs);
             }
 
             // Attach fresh daily total and emit.
-            let daily = load_daily_total(&app);
+            let daily = load_daily_total();
             let tick = TimerTick {
                 daily_total_seconds: daily,
                 ..tick
@@ -236,7 +279,7 @@ pub fn stop_timer(
         let elapsed = full.saturating_sub(s.remaining_seconds);
         if elapsed > 0 {
             drop(s);
-            add_daily_work_seconds(&app, elapsed);
+            add_daily_work_seconds(elapsed);
             // Re-lock.
             s = state.lock().unwrap();
         }
@@ -246,7 +289,7 @@ pub fn stop_timer(
     s.phase = TimerPhase::Work;
     s.remaining_seconds = s.settings.work_minutes * 60;
 
-    let daily = load_daily_total(&app);
+    let daily = load_daily_total();
     let tick = TimerTick {
         remaining_seconds: s.remaining_seconds,
         phase: s.phase,
@@ -278,18 +321,11 @@ pub fn update_settings(
         break_minutes,
     };
 
-    // Persist to disk.
-    if let Ok(store) = app.store("settings.json") {
-        let _ = store.set(
-            "workMinutes",
-            serde_json::Value::Number(work_minutes.into()),
-        );
-        let _ = store.set(
-            "breakMinutes",
-            serde_json::Value::Number(break_minutes.into()),
-        );
-        let _ = store.save();
-    }
+    // Persist to disk (alongside the exe).
+    let mut file = load_settings_file();
+    file.work_minutes = work_minutes;
+    file.break_minutes = break_minutes;
+    save_settings_file(&file);
 
     let mut s = state.lock().unwrap();
     s.settings = new_settings.clone();
@@ -300,7 +336,7 @@ pub fn update_settings(
         s.remaining_seconds = new_settings.work_minutes * 60;
     }
 
-    let daily = load_daily_total(&app);
+    let daily = load_daily_total();
     let tick = TimerTick {
         remaining_seconds: s.remaining_seconds,
         phase: s.phase,

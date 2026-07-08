@@ -64,6 +64,13 @@ body {
   letter-spacing: 4px;
 }
 
+/* ---- Daily total ---- */
+#daily-total {
+  font-size: 0.95rem;
+  color: #888;
+  margin-bottom: 24px;
+}
+
 /* ---- Toggle button ---- */
 #toggle-btn {
   font-size: 1.2rem;

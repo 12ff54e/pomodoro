@@ -40,6 +40,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             timer::get_state,
+            timer::get_daily_total,
             timer::start_timer,
             timer::stop_timer,
             timer::update_settings,

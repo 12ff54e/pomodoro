@@ -13,12 +13,25 @@ const workInput = document.getElementById('work-minutes');
 const breakInput = document.getElementById('break-minutes');
 const saveBtn = document.getElementById('save-settings');
 const cancelBtn = document.getElementById('cancel-settings');
+const dailyTotalEl = document.getElementById('daily-total');
 
 // ---- Helpers ----
 function formatTime(totalSeconds) {
   const m = Math.floor(totalSeconds / 60);
   const s = totalSeconds % 60;
   return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+}
+
+function formatDailyTotal(totalSeconds) {
+  if (!totalSeconds || totalSeconds === 0) {
+    return '0m';
+  }
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  if (hours > 0) {
+    return hours + 'h ' + minutes + 'm';
+  }
+  return minutes + 'm';
 }
 
 function render(tick) {
@@ -41,6 +54,11 @@ function render(tick) {
   } else {
     toggleBtn.textContent = 'Start';
     toggleBtn.classList.remove('is-running');
+  }
+
+  // Update daily total if present in the tick.
+  if (tick.dailyTotalSeconds !== undefined) {
+    dailyTotalEl.textContent = 'Today: ' + formatDailyTotal(tick.dailyTotalSeconds);
   }
 }
 
@@ -110,7 +128,9 @@ overlay.addEventListener('click', (e) => {
   try {
     const tick = await invoke('get_state');
     render(tick);
+    const daily = await invoke('get_daily_total');
+    dailyTotalEl.textContent = 'Today: ' + formatDailyTotal(daily);
   } catch (e) {
-    console.error('get_state failed:', e);
+    console.error('init failed:', e);
   }
 })();

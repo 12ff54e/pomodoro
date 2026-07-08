@@ -1,0 +1,171 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: hidden;
+}
+
+/* ---- Settings gear button (top-right) ---- */
+#settings-btn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 28px;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+#settings-btn:hover {
+  color: #fff;
+}
+
+/* ---- Phase indicator ---- */
+#phase {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  padding: 6px 20px;
+  border-radius: 20px;
+  margin-bottom: 24px;
+  transition: background 0.3s, color 0.3s;
+}
+.phase-work {
+  background: rgba(233, 69, 96, 0.2);
+  color: #e94560;
+}
+.phase-break {
+  background: rgba(22, 199, 154, 0.2);
+  color: #16c79a;
+}
+
+/* ---- Timer ---- */
+#timer {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 6rem;
+  font-weight: 700;
+  color: #f0f0f0;
+  margin-bottom: 40px;
+  letter-spacing: 4px;
+}
+
+/* ---- Toggle button ---- */
+#toggle-btn {
+  font-size: 1.2rem;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 14px 52px;
+  border: none;
+  border-radius: 40px;
+  cursor: pointer;
+  background: #e94560;
+  color: #fff;
+  transition: background 0.2s, transform 0.1s;
+}
+#toggle-btn:hover {
+  background: #d13652;
+}
+#toggle-btn:active {
+  transform: scale(0.96);
+}
+#toggle-btn.is-running {
+  background: #555;
+}
+#toggle-btn.is-running:hover {
+  background: #777;
+}
+
+/* ---- Settings overlay ---- */
+#settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+#settings-overlay.hidden {
+  display: none;
+}
+
+#settings-panel {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 12px;
+  padding: 32px 36px;
+  min-width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+#settings-panel h2 {
+  font-size: 1.3rem;
+  margin-bottom: 4px;
+  text-align: center;
+  color: #fff;
+}
+#settings-panel label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.95rem;
+  color: #ccc;
+}
+#settings-panel input[type="number"] {
+  width: 80px;
+  padding: 6px 10px;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-size: 0.95rem;
+  text-align: center;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+.settings-actions button {
+  padding: 10px 24px;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+#save-settings {
+  background: #e94560;
+  color: #fff;
+}
+#save-settings:hover {
+  background: #d13652;
+}
+.btn-secondary {
+  background: #333;
+  color: #ccc;
+}
+.btn-secondary:hover {
+  background: #444;
+}

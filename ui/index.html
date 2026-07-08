@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pomodoro</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Gear icon to open settings -->
+  <button id="settings-btn" title="Settings">&#9881;</button>
+
+  <!-- Phase indicator -->
+  <div id="phase" class="phase-work">WORK</div>
+
+  <!-- Timer display -->
+  <div id="timer">25:00</div>
+
+  <!-- Start / Stop button -->
+  <button id="toggle-btn">Start</button>
+
+  <!-- Settings panel (hidden by default) -->
+  <div id="settings-overlay" class="hidden">
+    <div id="settings-panel">
+      <h2>Settings</h2>
+      <label>
+        Work (minutes):
+        <input type="number" id="work-minutes" min="1" max="120" value="25" />
+      </label>
+      <label>
+        Break (minutes):
+        <input type="number" id="break-minutes" min="1" max="120" value="5" />
+      </label>
+      <div class="settings-actions">
+        <button id="save-settings">Save</button>
+        <button id="cancel-settings" class="btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

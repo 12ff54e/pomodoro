@@ -1,0 +1,4 @@
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "link-args=-Wl,--exclude-all-symbols"]
+# If the MinGW toolchain is not in your PATH, uncomment and adjust:
+# linker = "C:\\msys64\\mingw64\\bin\\x86_64-w64-mingw32-gcc.exe"

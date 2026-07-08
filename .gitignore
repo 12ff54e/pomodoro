@@ -1,0 +1,5 @@
+# Rust / Cargo
+src-tauri/target/
+
+# Generated schemas (rebuilt by tauri-build)
+src-tauri/gen/

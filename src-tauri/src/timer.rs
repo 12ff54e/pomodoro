@@ -166,6 +166,9 @@ pub fn start_timer(
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
 
+            // Work that must be done AFTER releasing the state lock.
+            let mut work_completed: Option<u64> = None;
+
             let tick = {
                 let state = app.state::<Mutex<PomodoroState>>();
                 let mut s = state.lock().unwrap();
@@ -177,15 +180,11 @@ pub fn start_timer(
                 }
                 if s.remaining_seconds == 0 {
                     match s.phase {
-                        // Work done -> add full session, switch to break.
                         TimerPhase::Work => {
-                            let full_work = settings.work_minutes * 60;
+                            work_completed = Some(settings.work_minutes * 60);
                             s.phase = TimerPhase::Break;
                             s.remaining_seconds = settings.break_minutes * 60;
-                            drop(s);
-                            let _total = add_daily_work_seconds(&app, full_work);
                         }
-                        // Break done -> stop and reset.
                         TimerPhase::Break => {
                             s.running = false;
                             s.phase = TimerPhase::Work;
@@ -193,19 +192,27 @@ pub fn start_timer(
                         }
                     }
                 }
-
-                // Re-lock if we dropped it above.
-                let state = app.state::<Mutex<PomodoroState>>();
-                let s = state.lock().unwrap();
-                let daily = load_daily_total(&app);
-                TimerTick {
+                let tick = TimerTick {
                     remaining_seconds: s.remaining_seconds,
                     phase: s.phase,
                     running: s.running,
-                    daily_total_seconds: daily,
-                }
-            };
+                    daily_total_seconds: 0, // filled in below
+                };
+                drop(s);
+                tick
+            }; // state lock released here
 
+            // Record completed work (outside the lock to avoid deadlock).
+            if let Some(secs) = work_completed {
+                add_daily_work_seconds(&app, secs);
+            }
+
+            // Attach fresh daily total and emit.
+            let daily = load_daily_total(&app);
+            let tick = TimerTick {
+                daily_total_seconds: daily,
+                ..tick
+            };
             let _ = app.emit("timer-tick", &tick);
         }
     });

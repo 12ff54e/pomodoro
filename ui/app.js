@@ -1,9 +1,12 @@
 // ---- State (mirrored from Rust, updated by events) ----
-let currentPhase = 'work';
-let currentSession = 'pomodoro';
+let sessions = [];
+let activeSessionIndex = 0;
+let currentPartName = 'Work';
+let currentSessionName = 'Pomodoro';
+let sessionCount = 1;
 let isRunning = false;
-let lastPhase = 'work';
-let settings = { workMinutes: 25, breakMinutes: 5, playMinutes: 25, playBreakMinutes: 5 };
+let wasRunning = false;
+let lastPartName = '';
 
 // ---- Audio context (lazy, created on first beep) ----
 let audioCtx = null;
@@ -29,7 +32,7 @@ function beep(freq, durationMs, count = 1) {
     gain.connect(ctx.destination);
     osc.start(ctx.currentTime + delay);
     osc.stop(ctx.currentTime + delay + durationMs / 1000 + 0.05);
-    delay += durationMs / 1000 + 0.15; // gap between beeps
+    delay += durationMs / 1000 + 0.15;
   }
 }
 
@@ -42,10 +45,8 @@ const sessionLeftBtn = document.getElementById('session-left');
 const sessionRightBtn = document.getElementById('session-right');
 const settingsBtn = document.getElementById('settings-btn');
 const overlay = document.getElementById('settings-overlay');
-const workInput = document.getElementById('work-minutes');
-const breakInput = document.getElementById('break-minutes');
-const playInput = document.getElementById('play-minutes');
-const playBreakInput = document.getElementById('play-break-minutes');
+const sessionsContainer = document.getElementById('sessions-container');
+const addSessionBtn = document.getElementById('add-session-btn');
 const saveBtn = document.getElementById('save-settings');
 const cancelBtn = document.getElementById('cancel-settings');
 const dailyTotalEl = document.getElementById('daily-total');
@@ -58,50 +59,47 @@ function formatTime(totalSeconds) {
 }
 
 function formatDailyTotal(totalSeconds) {
-  if (!totalSeconds || totalSeconds === 0) {
-    return '0m';
-  }
+  if (!totalSeconds || totalSeconds === 0) return '0m';
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
-  if (hours > 0) {
-    return hours + 'h ' + minutes + 'm';
-  }
+  if (hours > 0) return hours + 'h ' + minutes + 'm';
   return minutes + 'm';
 }
 
-function render(tick) {
-  // Detect phase transitions and play sound.
-  if (tick.phase !== lastPhase) {
-    if (tick.phase === 'break') {
-      // Focus/play session done — 3 short high beeps.
-      beep(880, 150, 3);
-    } else {
-      // Break done — 1 longer lower beep.
-      beep(660, 400, 1);
-    }
-    lastPhase = tick.phase;
-  }
+/** Map a part name to a CSS class for the phase badge. */
+function phaseClass(partName) {
+  const key = partName.toLowerCase();
+  if (key === 'work') return 'phase-work';
+  if (key === 'break') return 'phase-break';
+  if (key === 'play') return 'phase-play';
+  return 'phase-default';
+}
 
-  currentPhase = tick.phase;
-  currentSession = tick.sessionType || 'pomodoro';
+function render(tick) {
+  // Beep on timer-driven transitions only (not manual switches or startup).
+  const partChanged = tick.partName !== lastPartName;
+  if (partChanged && tick.running) {
+    // Timer auto-advanced to the next part — short triple beep.
+    beep(880, 150, 3);
+  } else if (partChanged && !tick.running && wasRunning) {
+    // Session finished (last part ended, timer stopped) — single long beep.
+    beep(660, 600, 1);
+  }
+  if (partChanged) {
+    lastPartName = tick.partName;
+  }
+  wasRunning = tick.running;
+
+  currentPartName = tick.partName;
+  currentSessionName = tick.sessionName;
+  activeSessionIndex = tick.activeSessionIndex;
+  sessionCount = tick.sessionCount;
   isRunning = tick.running;
 
   timerEl.textContent = formatTime(tick.remainingSeconds);
-
-  // Phase badge.
-  if (tick.phase === 'work') {
-    phaseEl.textContent = 'WORK';
-    phaseEl.className = 'phase-work';
-  } else if (tick.phase === 'play') {
-    phaseEl.textContent = 'PLAY';
-    phaseEl.className = 'phase-play';
-  } else {
-    phaseEl.textContent = 'BREAK';
-    phaseEl.className = 'phase-break';
-  }
-
-  // Session label.
-  sessionLabelEl.textContent = currentSession === 'playbreak' ? 'Play / Break' : 'Pomodoro';
+  phaseEl.textContent = tick.partName.toUpperCase();
+  phaseEl.className = phaseClass(tick.partName);
+  sessionLabelEl.textContent = tick.sessionName;
 
   if (tick.running) {
     toggleBtn.textContent = 'Stop';
@@ -111,64 +109,48 @@ function render(tick) {
     toggleBtn.classList.remove('is-running');
   }
 
-  // Update daily total if present in the tick.
   if (tick.dailyTotalSeconds !== undefined) {
     dailyTotalEl.textContent = 'Today: ' + formatDailyTotal(tick.dailyTotalSeconds);
   }
 }
 
-// ---- Tauri API (global Tauri enabled) ----
+// ---- Tauri API ----
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
-// ---- Event: timer tick from backend ----
 listen('timer-tick', (event) => {
   render(event.payload);
 });
 
 // ---- Toggle button ----
 toggleBtn.addEventListener('click', async () => {
-  if (isRunning) {
-    try {
+  try {
+    if (isRunning) {
       await invoke('stop_timer');
-    } catch (e) {
-      console.error('stop_timer failed:', e);
-    }
-  } else {
-    try {
+    } else {
       await invoke('start_timer');
-    } catch (e) {
-      console.error('start_timer failed:', e);
     }
+  } catch (e) {
+    console.error('toggle failed:', e);
   }
 });
 
 // ---- Session switcher arrows ----
-const sessionOrder = ['pomodoro', 'playbreak'];
-
-function nextSession() {
-  const idx = sessionOrder.indexOf(currentSession);
-  return sessionOrder[(idx + 1) % sessionOrder.length];
-}
-
-function prevSession() {
-  const idx = sessionOrder.indexOf(currentSession);
-  return sessionOrder[(idx - 1 + sessionOrder.length) % sessionOrder.length];
-}
-
 sessionLeftBtn.addEventListener('click', async () => {
-  if (isRunning) return;
+  if (isRunning || sessionCount <= 1) return;
+  const prev = (activeSessionIndex - 1 + sessionCount) % sessionCount;
   try {
-    await invoke('switch_session', { sessionType: prevSession() });
+    await invoke('switch_session', { index: prev });
   } catch (e) {
     console.error('switch_session failed:', e);
   }
 });
 
 sessionRightBtn.addEventListener('click', async () => {
-  if (isRunning) return;
+  if (isRunning || sessionCount <= 1) return;
+  const next = (activeSessionIndex + 1) % sessionCount;
   try {
-    await invoke('switch_session', { sessionType: nextSession() });
+    await invoke('switch_session', { index: next });
   } catch (e) {
     console.error('switch_session failed:', e);
   }
@@ -176,31 +158,134 @@ sessionRightBtn.addEventListener('click', async () => {
 
 // ---- Keyboard shortcuts ----
 document.addEventListener('keydown', async (e) => {
-  // Ignore when typing in inputs.
   if (e.target.tagName === 'INPUT') return;
-  if (isRunning) return;
+  if (isRunning || sessionCount <= 1) return;
 
   if (e.key === 'ArrowLeft' || e.key === 'h') {
-    try {
-      await invoke('switch_session', { sessionType: prevSession() });
-    } catch (err) {
-      console.error('switch_session failed:', err);
-    }
+    const prev = (activeSessionIndex - 1 + sessionCount) % sessionCount;
+    try { await invoke('switch_session', { index: prev }); } catch (_) {}
   } else if (e.key === 'ArrowRight' || e.key === 'l') {
-    try {
-      await invoke('switch_session', { sessionType: nextSession() });
-    } catch (err) {
-      console.error('switch_session failed:', err);
-    }
+    const next = (activeSessionIndex + 1) % sessionCount;
+    try { await invoke('switch_session', { index: next }); } catch (_) {}
   }
 });
 
-// ---- Settings ----
+// ---- Dynamic settings form ----
+
+/** Create a new default session (Work → Break). */
+function makeDefaultSession() {
+  return {
+    name: 'Work / Break',
+    parts: [
+      { name: 'Work', minutes: 25 },
+      { name: 'Break', minutes: 5 },
+    ],
+  };
+}
+
+/** Rebuild the settings form from the sessions array. */
+function buildSettingsForm(editSessions) {
+  sessionsContainer.innerHTML = '';
+
+  editSessions.forEach((session, si) => {
+    const card = document.createElement('div');
+    card.className = 'session-card';
+
+    // Header: session name + delete button.
+    const header = document.createElement('div');
+    header.className = 'session-header';
+
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.value = session.name;
+    nameInput.placeholder = 'Session name';
+    nameInput.addEventListener('input', () => {
+      editSessions[si].name = nameInput.value;
+    });
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn-delete-session';
+    delBtn.textContent = '×';  // ×
+    delBtn.title = 'Delete session';
+    delBtn.addEventListener('click', () => {
+      if (editSessions.length <= 1) return; // keep at least 1 session
+      editSessions.splice(si, 1);
+      buildSettingsForm(editSessions);
+    });
+
+    header.appendChild(nameInput);
+    header.appendChild(delBtn);
+
+    // Parts list.
+    const partsList = document.createElement('div');
+    partsList.className = 'parts-list';
+
+    session.parts.forEach((part, pi) => {
+      const row = document.createElement('div');
+      row.className = 'part-row';
+
+      const partName = document.createElement('input');
+      partName.type = 'text';
+      partName.value = part.name;
+      partName.placeholder = 'Part name';
+      partName.addEventListener('input', () => {
+        editSessions[si].parts[pi].name = partName.value;
+      });
+
+      const partMin = document.createElement('input');
+      partMin.type = 'number';
+      partMin.min = 1;
+      partMin.max = 120;
+      partMin.value = part.minutes;
+      partMin.addEventListener('input', () => {
+        const v = parseInt(partMin.value, 10);
+        if (!isNaN(v)) editSessions[si].parts[pi].minutes = v;
+      });
+
+      const rmBtn = document.createElement('button');
+      rmBtn.className = 'btn-delete-part';
+      rmBtn.textContent = '×';
+      rmBtn.title = 'Remove part';
+      rmBtn.addEventListener('click', () => {
+        if (editSessions[si].parts.length <= 1) return;
+        editSessions[si].parts.splice(pi, 1);
+        buildSettingsForm(editSessions);
+      });
+
+      row.appendChild(partName);
+      row.appendChild(partMin);
+      row.appendChild(rmBtn);
+      partsList.appendChild(row);
+    });
+
+    // Add part button.
+    const addPart = document.createElement('button');
+    addPart.className = 'btn-add-part';
+    addPart.textContent = '+ Add Part';
+    addPart.addEventListener('click', () => {
+      editSessions[si].parts.push({ name: 'Rest', minutes: 5 });
+      buildSettingsForm(editSessions);
+    });
+
+    card.appendChild(header);
+    card.appendChild(partsList);
+    card.appendChild(addPart);
+    sessionsContainer.appendChild(card);
+  });
+}
+
+// ---- Settings open / close ----
 settingsBtn.addEventListener('click', () => {
-  workInput.value = settings.workMinutes;
-  breakInput.value = settings.breakMinutes;
-  playInput.value = settings.playMinutes;
-  playBreakInput.value = settings.playBreakMinutes;
+  // Deep-clone sessions for editing.
+  const editSessions = sessions.map(s => ({
+    name: s.name,
+    parts: s.parts.map(p => ({ name: p.name, minutes: p.minutes })),
+  }));
+  buildSettingsForm(editSessions);
+
+  // Store reference for save.
+  overlay._editSessions = editSessions;
+
   overlay.classList.remove('hidden');
 });
 
@@ -208,24 +293,42 @@ cancelBtn.addEventListener('click', () => {
   overlay.classList.add('hidden');
 });
 
+addSessionBtn.addEventListener('click', () => {
+  const edit = overlay._editSessions;
+  if (!edit) return;
+  edit.push(makeDefaultSession());
+  buildSettingsForm(edit);
+});
+
 saveBtn.addEventListener('click', async () => {
-  const wm = parseInt(workInput.value, 10);
-  const bm = parseInt(breakInput.value, 10);
-  const pm = parseInt(playInput.value, 10);
-  const pbm = parseInt(playBreakInput.value, 10);
-  if (isNaN(wm) || isNaN(bm) || isNaN(pm) || isNaN(pbm)) return;
+  const edit = overlay._editSessions;
+  if (!edit) return;
+
+  // Basic client-side validation.
+  for (const s of edit) {
+    if (!s.name.trim()) {
+      alert('Each session must have a name.');
+      return;
+    }
+    for (const p of s.parts) {
+      if (!p.name.trim()) {
+        alert('Each part must have a name.');
+        return;
+      }
+      if (!p.minutes || p.minutes < 1 || p.minutes > 120) {
+        alert('Part minutes must be between 1 and 120.');
+        return;
+      }
+    }
+  }
 
   try {
-    const newSettings = await invoke('update_settings', {
-      workMinutes: wm,
-      breakMinutes: bm,
-      playMinutes: pm,
-      playBreakMinutes: pbm,
-    });
-    settings = newSettings;
+    const newSettings = await invoke('update_settings', { sessions: edit });
+    sessions = newSettings.sessions;
     overlay.classList.add('hidden');
   } catch (e) {
     console.error('update_settings failed:', e);
+    alert('Failed to save: ' + e);
   }
 });
 
@@ -239,9 +342,13 @@ overlay.addEventListener('click', (e) => {
 // ---- Initial load ----
 (async () => {
   try {
-    const tick = await invoke('get_state');
+    const [tick, daily, settings] = await Promise.all([
+      invoke('get_state'),
+      invoke('get_daily_total'),
+      invoke('get_settings'),
+    ]);
+    sessions = settings.sessions;
     render(tick);
-    const daily = await invoke('get_daily_total');
     dailyTotalEl.textContent = 'Today: ' + formatDailyTotal(daily);
   } catch (e) {
     console.error('init failed:', e);

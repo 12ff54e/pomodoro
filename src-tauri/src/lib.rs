@@ -6,18 +6,12 @@ mod timer;
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let settings = timer::load_settings();
-            let session_type = timer::load_session_type();
+            let (settings, active_index) = timer::load_settings();
+            let remaining = settings.sessions[active_index].parts[0].minutes * 60;
             let state = timer::PomodoroState {
-                session_type,
-                phase: match session_type {
-                    timer::SessionType::Pomodoro => timer::TimerPhase::Work,
-                    timer::SessionType::PlayBreak => timer::TimerPhase::Play,
-                },
-                remaining_seconds: match session_type {
-                    timer::SessionType::Pomodoro => settings.work_minutes * 60,
-                    timer::SessionType::PlayBreak => settings.play_minutes * 60,
-                },
+                active_session_index: active_index,
+                current_part_index: 0,
+                remaining_seconds: remaining,
                 settings,
                 running: false,
             };
@@ -27,6 +21,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             timer::get_state,
             timer::get_daily_total,
+            timer::get_settings,
             timer::start_timer,
             timer::stop_timer,
             timer::update_settings,

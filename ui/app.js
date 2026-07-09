@@ -1,8 +1,9 @@
 // ---- State (mirrored from Rust, updated by events) ----
 let currentPhase = 'work';
+let currentSession = 'pomodoro';
 let isRunning = false;
 let lastPhase = 'work';
-let settings = { workMinutes: 25, breakMinutes: 5 };
+let settings = { workMinutes: 25, breakMinutes: 5, playMinutes: 25, playBreakMinutes: 5 };
 
 // ---- Audio context (lazy, created on first beep) ----
 let audioCtx = null;
@@ -35,11 +36,16 @@ function beep(freq, durationMs, count = 1) {
 // ---- DOM references ----
 const timerEl = document.getElementById('timer');
 const phaseEl = document.getElementById('phase');
+const sessionLabelEl = document.getElementById('session-label');
 const toggleBtn = document.getElementById('toggle-btn');
+const sessionLeftBtn = document.getElementById('session-left');
+const sessionRightBtn = document.getElementById('session-right');
 const settingsBtn = document.getElementById('settings-btn');
 const overlay = document.getElementById('settings-overlay');
 const workInput = document.getElementById('work-minutes');
 const breakInput = document.getElementById('break-minutes');
+const playInput = document.getElementById('play-minutes');
+const playBreakInput = document.getElementById('play-break-minutes');
 const saveBtn = document.getElementById('save-settings');
 const cancelBtn = document.getElementById('cancel-settings');
 const dailyTotalEl = document.getElementById('daily-total');
@@ -67,7 +73,7 @@ function render(tick) {
   // Detect phase transitions and play sound.
   if (tick.phase !== lastPhase) {
     if (tick.phase === 'break') {
-      // Work done — 3 short high beeps.
+      // Focus/play session done — 3 short high beeps.
       beep(880, 150, 3);
     } else {
       // Break done — 1 longer lower beep.
@@ -77,17 +83,25 @@ function render(tick) {
   }
 
   currentPhase = tick.phase;
+  currentSession = tick.sessionType || 'pomodoro';
   isRunning = tick.running;
 
   timerEl.textContent = formatTime(tick.remainingSeconds);
 
+  // Phase badge.
   if (tick.phase === 'work') {
     phaseEl.textContent = 'WORK';
     phaseEl.className = 'phase-work';
+  } else if (tick.phase === 'play') {
+    phaseEl.textContent = 'PLAY';
+    phaseEl.className = 'phase-play';
   } else {
     phaseEl.textContent = 'BREAK';
     phaseEl.className = 'phase-break';
   }
+
+  // Session label.
+  sessionLabelEl.textContent = currentSession === 'playbreak' ? 'Play / Break' : 'Pomodoro';
 
   if (tick.running) {
     toggleBtn.textContent = 'Stop';
@@ -129,10 +143,64 @@ toggleBtn.addEventListener('click', async () => {
   }
 });
 
+// ---- Session switcher arrows ----
+const sessionOrder = ['pomodoro', 'playbreak'];
+
+function nextSession() {
+  const idx = sessionOrder.indexOf(currentSession);
+  return sessionOrder[(idx + 1) % sessionOrder.length];
+}
+
+function prevSession() {
+  const idx = sessionOrder.indexOf(currentSession);
+  return sessionOrder[(idx - 1 + sessionOrder.length) % sessionOrder.length];
+}
+
+sessionLeftBtn.addEventListener('click', async () => {
+  if (isRunning) return;
+  try {
+    await invoke('switch_session', { sessionType: prevSession() });
+  } catch (e) {
+    console.error('switch_session failed:', e);
+  }
+});
+
+sessionRightBtn.addEventListener('click', async () => {
+  if (isRunning) return;
+  try {
+    await invoke('switch_session', { sessionType: nextSession() });
+  } catch (e) {
+    console.error('switch_session failed:', e);
+  }
+});
+
+// ---- Keyboard shortcuts ----
+document.addEventListener('keydown', async (e) => {
+  // Ignore when typing in inputs.
+  if (e.target.tagName === 'INPUT') return;
+  if (isRunning) return;
+
+  if (e.key === 'ArrowLeft' || e.key === 'h') {
+    try {
+      await invoke('switch_session', { sessionType: prevSession() });
+    } catch (err) {
+      console.error('switch_session failed:', err);
+    }
+  } else if (e.key === 'ArrowRight' || e.key === 'l') {
+    try {
+      await invoke('switch_session', { sessionType: nextSession() });
+    } catch (err) {
+      console.error('switch_session failed:', err);
+    }
+  }
+});
+
 // ---- Settings ----
 settingsBtn.addEventListener('click', () => {
   workInput.value = settings.workMinutes;
   breakInput.value = settings.breakMinutes;
+  playInput.value = settings.playMinutes;
+  playBreakInput.value = settings.playBreakMinutes;
   overlay.classList.remove('hidden');
 });
 
@@ -143,12 +211,16 @@ cancelBtn.addEventListener('click', () => {
 saveBtn.addEventListener('click', async () => {
   const wm = parseInt(workInput.value, 10);
   const bm = parseInt(breakInput.value, 10);
-  if (isNaN(wm) || isNaN(bm)) return;
+  const pm = parseInt(playInput.value, 10);
+  const pbm = parseInt(playBreakInput.value, 10);
+  if (isNaN(wm) || isNaN(bm) || isNaN(pm) || isNaN(pbm)) return;
 
   try {
     const newSettings = await invoke('update_settings', {
       workMinutes: wm,
       breakMinutes: bm,
+      playMinutes: pm,
+      playBreakMinutes: pbm,
     });
     settings = newSettings;
     overlay.classList.add('hidden');

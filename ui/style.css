@@ -18,6 +18,47 @@ body {
   overflow: hidden;
 }
 
+/* ---- Session switcher arrows (left/right edges) ---- */
+#session-left,
+#session-right {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.18);
+  font-size: 48px;
+  cursor: pointer;
+  padding: 24px 12px;
+  transition: color 0.25s, background 0.25s;
+  z-index: 5;
+  line-height: 1;
+}
+#session-left {
+  left: 0;
+  border-radius: 0 8px 8px 0;
+}
+#session-right {
+  right: 0;
+  border-radius: 8px 0 0 8px;
+}
+#session-left:hover,
+#session-right:hover {
+  color: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ---- Session type label ---- */
+#session-label {
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: #666;
+  margin-bottom: 8px;
+  transition: color 0.3s;
+}
+
 /* ---- Settings gear button (top-right) ---- */
 #settings-btn {
   position: absolute;
@@ -52,6 +93,10 @@ body {
 .phase-break {
   background: rgba(22, 199, 154, 0.2);
   color: #16c79a;
+}
+.phase-play {
+  background: rgba(100, 149, 237, 0.2);
+  color: #6495ed;
 }
 
 /* ---- Timer ---- */
@@ -128,6 +173,17 @@ body {
   margin-bottom: 4px;
   text-align: center;
   color: #fff;
+}
+#settings-panel h3 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: #888;
+  margin-top: 8px;
+  margin-bottom: 0;
+  border-bottom: 1px solid #0f3460;
+  padding-bottom: 6px;
 }
 #settings-panel label {
   display: flex;

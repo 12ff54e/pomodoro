@@ -11,9 +11,17 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+pub enum SessionType {
+    Pomodoro,
+    PlayBreak,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum TimerPhase {
     Work,
     Break,
+    Play,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +31,7 @@ pub struct TimerTick {
     pub phase: TimerPhase,
     pub running: bool,
     pub daily_total_seconds: u64,
+    pub session_type: SessionType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +39,8 @@ pub struct TimerTick {
 pub struct PomodoroSettings {
     pub work_minutes: u64,
     pub break_minutes: u64,
+    pub play_minutes: u64,
+    pub play_break_minutes: u64,
 }
 
 impl Default for PomodoroSettings {
@@ -37,12 +48,15 @@ impl Default for PomodoroSettings {
         Self {
             work_minutes: 25,
             break_minutes: 5,
+            play_minutes: 25,
+            play_break_minutes: 5,
         }
     }
 }
 
 #[derive(Debug)]
 pub struct PomodoroState {
+    pub session_type: SessionType,
     pub phase: TimerPhase,
     pub remaining_seconds: u64,
     pub settings: PomodoroSettings,
@@ -80,6 +94,15 @@ struct SettingsFile {
     #[serde(default = "default_break")]
     #[serde(rename = "breakMinutes")]
     break_minutes: u64,
+    #[serde(default = "default_play")]
+    #[serde(rename = "playMinutes")]
+    play_minutes: u64,
+    #[serde(default = "default_play_break")]
+    #[serde(rename = "playBreakMinutes")]
+    play_break_minutes: u64,
+    #[serde(default = "default_session_type")]
+    #[serde(rename = "sessionType")]
+    session_type: String,
 }
 
 fn default_work() -> u64 {
@@ -88,12 +111,24 @@ fn default_work() -> u64 {
 fn default_break() -> u64 {
     5
 }
+fn default_play() -> u64 {
+    25
+}
+fn default_play_break() -> u64 {
+    5
+}
+fn default_session_type() -> String {
+    "pomodoro".into()
+}
 
 impl Default for SettingsFile {
     fn default() -> Self {
         Self {
             work_minutes: 25,
             break_minutes: 5,
+            play_minutes: 25,
+            play_break_minutes: 5,
+            session_type: "pomodoro".into(),
         }
     }
 }
@@ -154,12 +189,23 @@ fn today_string() -> String {
     format!("{:04}-{:02}-{:02}", y, m, d)
 }
 
-/// Load settings (work/break minutes) from the settings file.
+/// Load settings (work/break/play minutes) from the settings file.
 pub fn load_settings() -> PomodoroSettings {
     let file = load_settings_file();
     PomodoroSettings {
         work_minutes: file.work_minutes,
         break_minutes: file.break_minutes,
+        play_minutes: file.play_minutes,
+        play_break_minutes: file.play_break_minutes,
+    }
+}
+
+/// Load session type from the settings file.
+pub fn load_session_type() -> SessionType {
+    let file = load_settings_file();
+    match file.session_type.as_str() {
+        "playBreak" | "playbreak" => SessionType::PlayBreak,
+        _ => SessionType::Pomodoro,
     }
 }
 
@@ -194,6 +240,7 @@ pub fn get_state(state: State<'_, Mutex<PomodoroState>>) -> TimerTick {
         phase: s.phase,
         running: s.running,
         daily_total_seconds: 0, // caller should use get_daily_total for this
+        session_type: s.session_type,
     }
 }
 
@@ -213,6 +260,7 @@ pub fn start_timer(
     }
     s.running = true;
     let settings = s.settings.clone();
+    let session_type = s.session_type;
     drop(s); // release lock before spawning
 
     std::thread::spawn(move || {
@@ -238,10 +286,22 @@ pub fn start_timer(
                             s.phase = TimerPhase::Break;
                             s.remaining_seconds = settings.break_minutes * 60;
                         }
+                        TimerPhase::Play => {
+                            s.phase = TimerPhase::Break;
+                            s.remaining_seconds = settings.play_break_minutes * 60;
+                        }
                         TimerPhase::Break => {
                             s.running = false;
-                            s.phase = TimerPhase::Work;
-                            s.remaining_seconds = settings.work_minutes * 60;
+                            match session_type {
+                                SessionType::Pomodoro => {
+                                    s.phase = TimerPhase::Work;
+                                    s.remaining_seconds = settings.work_minutes * 60;
+                                }
+                                SessionType::PlayBreak => {
+                                    s.phase = TimerPhase::Play;
+                                    s.remaining_seconds = settings.play_minutes * 60;
+                                }
+                            }
                         }
                     }
                 }
@@ -250,6 +310,7 @@ pub fn start_timer(
                     phase: s.phase,
                     running: s.running,
                     daily_total_seconds: 0, // filled in below
+                    session_type: s.session_type,
                 };
                 drop(s);
                 tick
@@ -296,8 +357,17 @@ pub fn stop_timer(
     }
 
     s.running = false;
-    s.phase = TimerPhase::Work;
-    s.remaining_seconds = s.settings.work_minutes * 60;
+    // Reset to the starting phase for the current session type.
+    match s.session_type {
+        SessionType::Pomodoro => {
+            s.phase = TimerPhase::Work;
+            s.remaining_seconds = s.settings.work_minutes * 60;
+        }
+        SessionType::PlayBreak => {
+            s.phase = TimerPhase::Play;
+            s.remaining_seconds = s.settings.play_minutes * 60;
+        }
+    }
 
     let daily = load_daily_total();
     let tick = TimerTick {
@@ -305,6 +375,7 @@ pub fn stop_timer(
         phase: s.phase,
         running: false,
         daily_total_seconds: daily,
+        session_type: s.session_type,
     };
     drop(s);
 
@@ -318,6 +389,8 @@ pub fn update_settings(
     state: State<'_, Mutex<PomodoroState>>,
     work_minutes: u64,
     break_minutes: u64,
+    play_minutes: u64,
+    play_break_minutes: u64,
 ) -> Result<PomodoroSettings, String> {
     if work_minutes < 1 || work_minutes > 120 {
         return Err("Work minutes must be between 1 and 120".into());
@@ -325,25 +398,43 @@ pub fn update_settings(
     if break_minutes < 1 || break_minutes > 120 {
         return Err("Break minutes must be between 1 and 120".into());
     }
+    if play_minutes < 1 || play_minutes > 120 {
+        return Err("Play minutes must be between 1 and 120".into());
+    }
+    if play_break_minutes < 1 || play_break_minutes > 120 {
+        return Err("Play-break minutes must be between 1 and 120".into());
+    }
 
     let new_settings = PomodoroSettings {
         work_minutes,
         break_minutes,
+        play_minutes,
+        play_break_minutes,
     };
 
     // Persist to disk (alongside the exe).
     let mut file = load_settings_file();
     file.work_minutes = work_minutes;
     file.break_minutes = break_minutes;
+    file.play_minutes = play_minutes;
+    file.play_break_minutes = play_break_minutes;
     save_settings_file(&file);
 
     let mut s = state.lock().unwrap();
     s.settings = new_settings.clone();
 
-    // If the timer is stopped, reset the display for the new work duration.
+    // If the timer is stopped, reset the display for the current session type.
     if !s.running {
-        s.phase = TimerPhase::Work;
-        s.remaining_seconds = new_settings.work_minutes * 60;
+        match s.session_type {
+            SessionType::Pomodoro => {
+                s.phase = TimerPhase::Work;
+                s.remaining_seconds = new_settings.work_minutes * 60;
+            }
+            SessionType::PlayBreak => {
+                s.phase = TimerPhase::Play;
+                s.remaining_seconds = new_settings.play_minutes * 60;
+            }
+        }
     }
 
     let daily = load_daily_total();
@@ -352,6 +443,7 @@ pub fn update_settings(
         phase: s.phase,
         running: s.running,
         daily_total_seconds: daily,
+        session_type: s.session_type,
     };
     drop(s);
 
@@ -359,4 +451,51 @@ pub fn update_settings(
         let _ = app.emit("timer-tick", &tick);
     }
     Ok(new_settings)
+}
+
+#[tauri::command]
+pub fn switch_session(
+    app: AppHandle,
+    state: State<'_, Mutex<PomodoroState>>,
+    session_type: SessionType,
+) -> Result<(), String> {
+    let mut s = state.lock().unwrap();
+    if s.running {
+        return Err("Cannot switch session while timer is running".into());
+    }
+
+    s.session_type = session_type;
+
+    // Reset to the starting phase for the chosen session.
+    match session_type {
+        SessionType::Pomodoro => {
+            s.phase = TimerPhase::Work;
+            s.remaining_seconds = s.settings.work_minutes * 60;
+        }
+        SessionType::PlayBreak => {
+            s.phase = TimerPhase::Play;
+            s.remaining_seconds = s.settings.play_minutes * 60;
+        }
+    }
+
+    // Persist session type to settings file.
+    let mut file = load_settings_file();
+    file.session_type = match session_type {
+        SessionType::Pomodoro => "pomodoro".into(),
+        SessionType::PlayBreak => "playbreak".into(),
+    };
+    save_settings_file(&file);
+
+    let daily = load_daily_total();
+    let tick = TimerTick {
+        remaining_seconds: s.remaining_seconds,
+        phase: s.phase,
+        running: false,
+        daily_total_seconds: daily,
+        session_type: s.session_type,
+    };
+    drop(s);
+
+    let _ = app.emit("timer-tick", &tick);
+    Ok(())
 }

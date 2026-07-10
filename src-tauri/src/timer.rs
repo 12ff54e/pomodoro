@@ -13,6 +13,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 pub struct SessionPart {
     pub name: String,
     pub minutes: u64,
+    #[serde(default)]
+    pub extendable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,10 +37,12 @@ impl Default for PomodoroSettings {
                     SessionPart {
                         name: "Work".into(),
                         minutes: 25,
+                        extendable: false,
                     },
                     SessionPart {
                         name: "Break".into(),
                         minutes: 5,
+                        extendable: false,
                     },
                 ],
             }],
@@ -49,10 +53,11 @@ impl Default for PomodoroSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimerTick {
-    pub remaining_seconds: u64,
+    pub remaining_seconds: i64,
     pub session_name: String,
     pub part_name: String,
     pub running: bool,
+    pub paused: bool,
     pub daily_total_seconds: u64,
     pub active_session_index: usize,
     pub session_count: usize,
@@ -62,9 +67,12 @@ pub struct TimerTick {
 pub struct PomodoroState {
     pub active_session_index: usize,
     pub current_part_index: usize,
-    pub remaining_seconds: u64,
+    pub remaining_seconds: i64,
     pub settings: PomodoroSettings,
     pub running: bool,
+    pub paused: bool,
+    /// Accumulated overtime seconds for the current Work part (flushed on Continue/Stop).
+    pub overtime_work_seconds: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +134,8 @@ struct SessionDef {
 struct PartDef {
     name: String,
     minutes: u64,
+    #[serde(default)]
+    extendable: bool,
 }
 
 /// Build default sessions from legacy hardcoded sessions (migration path).
@@ -142,10 +152,12 @@ fn legacy_sessions(file: &SettingsFile) -> Vec<Session> {
                 SessionPart {
                     name: "Work".into(),
                     minutes: wm,
+                    extendable: false,
                 },
                 SessionPart {
                     name: "Break".into(),
                     minutes: bm,
+                    extendable: false,
                 },
             ],
         },
@@ -155,10 +167,12 @@ fn legacy_sessions(file: &SettingsFile) -> Vec<Session> {
                 SessionPart {
                     name: "Play".into(),
                     minutes: pm,
+                    extendable: false,
                 },
                 SessionPart {
                     name: "Break".into(),
                     minutes: pbm,
+                    extendable: false,
                 },
             ],
         },
@@ -183,6 +197,7 @@ fn save_settings(sessions: &[Session], active_index: usize) {
                 .map(|p| PartDef {
                     name: p.name.clone(),
                     minutes: p.minutes,
+                    extendable: p.extendable,
                 })
                 .collect(),
         })
@@ -254,6 +269,7 @@ pub fn load_settings() -> (PomodoroSettings, usize) {
                     .map(|p| SessionPart {
                         name: p.name,
                         minutes: p.minutes,
+                        extendable: p.extendable,
                     })
                     .collect(),
             })
@@ -304,6 +320,7 @@ fn build_tick(state: &PomodoroState, daily_total: u64) -> TimerTick {
         session_name: session.name.clone(),
         part_name: part.name.clone(),
         running: state.running,
+        paused: state.paused,
         daily_total_seconds: daily_total,
         active_session_index: state.active_session_index,
         session_count: state.settings.sessions.len(),
@@ -340,22 +357,29 @@ pub fn start_timer(
     if s.running {
         return Err("Timer is already running".into());
     }
+    // If paused, this acts as "continue" (legacy behaviour — start while paused
+    // resumes without advancing).
     let sessions = s.settings.sessions.clone();
     let active_idx = s.active_session_index;
     s.running = true;
+    s.paused = false;
+    s.overtime_work_seconds = 0;
     drop(s);
 
     std::thread::spawn(move || {
-        // Snapshot part names and durations from the session at start time.
+        // Snapshot part metadata from the session at start time.
         let part_names: Vec<String> = sessions[active_idx]
             .parts.iter().map(|p| p.name.clone()).collect();
-        let part_seconds: Vec<u64> = sessions[active_idx]
-            .parts.iter().map(|p| p.minutes * 60).collect();
+        let part_seconds: Vec<i64> = sessions[active_idx]
+            .parts.iter().map(|p| (p.minutes * 60) as i64).collect();
+        let part_extendable: Vec<bool> = sessions[active_idx]
+            .parts.iter().map(|p| p.extendable).collect();
 
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
 
             let mut work_completed: Option<u64> = None;
+            let mut phase_ended: bool = false;
 
             let tick = {
                 let state = app.state::<Mutex<PomodoroState>>();
@@ -366,13 +390,13 @@ pub fn start_timer(
                 if s.remaining_seconds > 0 {
                     s.remaining_seconds -= 1;
                 }
-                if s.remaining_seconds == 0 {
-                    // Check if the completed part was "Work" (using snapshot).
-                    if part_names[s.current_part_index].eq_ignore_ascii_case("work") {
-                        work_completed = Some(part_seconds[s.current_part_index]);
-                    }
-
-                    if s.current_part_index + 1 < part_seconds.len() {
+                if s.remaining_seconds == 0 && !s.paused {
+                    // Timer just reached zero.
+                    let idx = s.current_part_index;
+                    if part_extendable[idx] {
+                        // Extendable part — enter paused overtime mode.
+                        s.paused = true;
+                    } else if idx + 1 < part_seconds.len() {
                         // Advance to next part.
                         s.current_part_index += 1;
                         s.remaining_seconds = part_seconds[s.current_part_index];
@@ -381,6 +405,18 @@ pub fn start_timer(
                         s.running = false;
                         s.current_part_index = 0;
                         s.remaining_seconds = part_seconds[0];
+                        phase_ended = true;
+                    }
+
+                    // Check if the completed part was "Work".
+                    if part_names[idx].eq_ignore_ascii_case("work") {
+                        work_completed = Some(part_seconds[idx].max(0) as u64);
+                    }
+                } else if s.paused {
+                    // Overtime: keep decrementing into negative.
+                    s.remaining_seconds -= 1;
+                    if part_names[s.current_part_index].eq_ignore_ascii_case("work") {
+                        s.overtime_work_seconds += 1;
                     }
                 }
                 // Read session/part names from current state for display.
@@ -392,6 +428,7 @@ pub fn start_timer(
                     session_name: session.name.clone(),
                     part_name: part.name.clone(),
                     running: s.running,
+                    paused: s.paused,
                     daily_total_seconds: 0,
                     active_session_index: s.active_session_index,
                     session_count: sessions.len(),
@@ -410,6 +447,11 @@ pub fn start_timer(
                 ..tick
             };
             let _ = app.emit("timer-tick", &tick);
+
+            // If the session ended on its own, exit the loop.
+            if phase_ended {
+                break;
+            }
         }
     });
 
@@ -430,22 +472,81 @@ pub fn stop_timer(
     let sessions = &s.settings.sessions;
     let part = &sessions[s.active_session_index].parts[s.current_part_index];
     if part.name.eq_ignore_ascii_case("work") {
-        let full = part.minutes * 60;
-        let elapsed = full.saturating_sub(s.remaining_seconds);
-        if elapsed > 0 {
-            drop(s);
-            add_daily_work_seconds(elapsed);
-            s = state.lock().unwrap();
+        if s.paused {
+            // Full duration already recorded when part hit zero;
+            // only the overtime seconds are new.
+            let overtime = s.overtime_work_seconds;
+            if overtime > 0 {
+                drop(s);
+                add_daily_work_seconds(overtime);
+                s = state.lock().unwrap();
+            }
+        } else {
+            let full = (part.minutes * 60) as i64;
+            let elapsed = full.saturating_sub(s.remaining_seconds).max(0) as u64;
+            if elapsed > 0 {
+                drop(s);
+                add_daily_work_seconds(elapsed);
+                s = state.lock().unwrap();
+            }
         }
     }
 
     s.running = false;
+    s.paused = false;
+    s.overtime_work_seconds = 0;
     s.current_part_index = 0;
-    s.remaining_seconds = s.settings.sessions[s.active_session_index].parts[0].minutes * 60;
+    s.remaining_seconds = (s.settings.sessions[s.active_session_index].parts[0].minutes * 60) as i64;
 
     let daily = load_daily_total();
     let tick = build_tick(&s, daily);
     drop(s);
+
+    let _ = app.emit("timer-tick", &tick);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn continue_timer(
+    app: AppHandle,
+    state: State<'_, Mutex<PomodoroState>>,
+) -> Result<(), String> {
+    let mut s = state.lock().unwrap();
+    if !s.paused {
+        return Err("Timer is not in an extendable pause".into());
+    }
+
+    let part_count = s.settings.sessions[s.active_session_index].parts.len();
+    let next_seconds: i64 = if s.current_part_index + 1 < part_count {
+        (s.settings.sessions[s.active_session_index].parts[s.current_part_index + 1].minutes * 60) as i64
+    } else {
+        0
+    };
+    let reset_seconds: i64 = (s.settings.sessions[s.active_session_index].parts[0].minutes * 60) as i64;
+
+    let overtime = s.overtime_work_seconds;
+    s.overtime_work_seconds = 0;
+
+    if s.current_part_index + 1 < part_count {
+        // Advance to next part.
+        s.current_part_index += 1;
+        s.remaining_seconds = next_seconds;
+        s.paused = false;
+    } else {
+        // Last part — stop and reset.
+        s.running = false;
+        s.paused = false;
+        s.current_part_index = 0;
+        s.remaining_seconds = reset_seconds;
+    }
+
+    let daily = load_daily_total();
+    let tick = build_tick(&s, daily);
+    drop(s);
+
+    if overtime > 0 {
+        add_daily_work_seconds(overtime);
+    }
 
     let _ = app.emit("timer-tick", &tick);
     Ok(())
@@ -505,9 +606,11 @@ pub fn update_settings(
 
     // Reset display if stopped.
     if !s.running {
+        s.paused = false;
+        s.overtime_work_seconds = 0;
         s.current_part_index = 0;
         s.remaining_seconds =
-            s.settings.sessions[s.active_session_index].parts[0].minutes * 60;
+            (s.settings.sessions[s.active_session_index].parts[0].minutes * 60) as i64;
     }
 
     let daily = load_daily_total();
@@ -542,7 +645,9 @@ pub fn switch_session(
 
     s.active_session_index = index;
     s.current_part_index = 0;
-    s.remaining_seconds = s.settings.sessions[index].parts[0].minutes * 60;
+    s.paused = false;
+    s.overtime_work_seconds = 0;
+    s.remaining_seconds = (s.settings.sessions[index].parts[0].minutes * 60) as i64;
 
     save_settings(&s.settings.sessions, s.active_session_index);
 

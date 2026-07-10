@@ -5,6 +5,7 @@ let currentPartName = 'Work';
 let currentSessionName = 'Pomodoro';
 let sessionCount = 1;
 let isRunning = false;
+let isPaused = false;
 let wasRunning = false;
 let lastPartName = '';
 
@@ -41,6 +42,7 @@ const timerEl = document.getElementById('timer');
 const phaseEl = document.getElementById('phase');
 const sessionLabelEl = document.getElementById('session-label');
 const toggleBtn = document.getElementById('toggle-btn');
+const continueBtn = document.getElementById('continue-btn');
 const sessionLeftBtn = document.getElementById('session-left');
 const sessionRightBtn = document.getElementById('session-right');
 const settingsBtn = document.getElementById('settings-btn');
@@ -53,9 +55,11 @@ const dailyTotalEl = document.getElementById('daily-total');
 
 // ---- Helpers ----
 function formatTime(totalSeconds) {
-  const m = Math.floor(totalSeconds / 60);
-  const s = totalSeconds % 60;
-  return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+  const abs = Math.abs(totalSeconds);
+  const m = Math.floor(abs / 60);
+  const s = abs % 60;
+  const sign = totalSeconds < 0 ? '-' : '';
+  return sign + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
 }
 
 function formatDailyTotal(totalSeconds) {
@@ -78,12 +82,15 @@ function phaseClass(partName) {
 function render(tick) {
   // Beep on timer-driven transitions only (not manual switches or startup).
   const partChanged = tick.partName !== lastPartName;
-  if (partChanged && tick.running) {
+  if (partChanged && tick.running && !tick.paused && !isPaused) {
     // Timer auto-advanced to the next part — short triple beep.
     beep(880, 150, 3);
   } else if (partChanged && !tick.running && wasRunning) {
     // Session finished (last part ended, timer stopped) — single long beep.
     beep(660, 600, 1);
+  } else if (tick.paused && !isPaused) {
+    // Just entered overtime — same triple beep as normal transitions.
+    beep(880, 150, 3);
   }
   if (partChanged) {
     lastPartName = tick.partName;
@@ -95,11 +102,27 @@ function render(tick) {
   activeSessionIndex = tick.activeSessionIndex;
   sessionCount = tick.sessionCount;
   isRunning = tick.running;
+  isPaused = tick.paused;
 
   timerEl.textContent = formatTime(tick.remainingSeconds);
+
+  // Add overtime class when in negative time.
+  if (tick.remainingSeconds < 0) {
+    timerEl.classList.add('overtime');
+  } else {
+    timerEl.classList.remove('overtime');
+  }
+
   phaseEl.textContent = tick.partName.toUpperCase();
   phaseEl.className = phaseClass(tick.partName);
   sessionLabelEl.textContent = tick.sessionName;
+
+  // Show/hide Continue button based on paused state.
+  if (tick.paused) {
+    continueBtn.classList.remove('hidden');
+  } else {
+    continueBtn.classList.add('hidden');
+  }
 
   if (tick.running) {
     toggleBtn.textContent = 'Stop';
@@ -135,6 +158,15 @@ toggleBtn.addEventListener('click', async () => {
   }
 });
 
+// ---- Continue button ----
+continueBtn.addEventListener('click', async () => {
+  try {
+    await invoke('continue_timer');
+  } catch (e) {
+    console.error('continue_timer failed:', e);
+  }
+});
+
 // ---- Session switcher arrows ----
 sessionLeftBtn.addEventListener('click', async () => {
   if (isRunning || sessionCount <= 1) return;
@@ -159,6 +191,14 @@ sessionRightBtn.addEventListener('click', async () => {
 // ---- Keyboard shortcuts ----
 document.addEventListener('keydown', async (e) => {
   if (e.target.tagName === 'INPUT') return;
+
+  // Space/Enter to continue when paused (overtime).
+  if (isPaused && (e.key === ' ' || e.key === 'Enter')) {
+    e.preventDefault();
+    try { await invoke('continue_timer'); } catch (_) {}
+    return;
+  }
+
   if (isRunning || sessionCount <= 1) return;
 
   if (e.key === 'ArrowLeft' || e.key === 'h') {
@@ -177,8 +217,8 @@ function makeDefaultSession() {
   return {
     name: 'Work / Break',
     parts: [
-      { name: 'Work', minutes: 25 },
-      { name: 'Break', minutes: 5 },
+      { name: 'Work', minutes: 25, extendable: false },
+      { name: 'Break', minutes: 5, extendable: false },
     ],
   };
 }
@@ -242,6 +282,18 @@ function buildSettingsForm(editSessions) {
         if (!isNaN(v)) editSessions[si].parts[pi].minutes = v;
       });
 
+      const extLabel = document.createElement('label');
+      extLabel.className = 'extendable-label';
+      const extCheck = document.createElement('input');
+      extCheck.type = 'checkbox';
+      extCheck.checked = part.extendable || false;
+      extCheck.title = 'Extendable: timer continues past zero until you click Continue';
+      extCheck.addEventListener('change', () => {
+        editSessions[si].parts[pi].extendable = extCheck.checked;
+      });
+      extLabel.appendChild(extCheck);
+      extLabel.appendChild(document.createTextNode(' Ext'));
+
       const rmBtn = document.createElement('button');
       rmBtn.className = 'btn-delete-part';
       rmBtn.textContent = '×';
@@ -254,6 +306,7 @@ function buildSettingsForm(editSessions) {
 
       row.appendChild(partName);
       row.appendChild(partMin);
+      row.appendChild(extLabel);
       row.appendChild(rmBtn);
       partsList.appendChild(row);
     });
@@ -263,7 +316,7 @@ function buildSettingsForm(editSessions) {
     addPart.className = 'btn-add-part';
     addPart.textContent = '+ Add Part';
     addPart.addEventListener('click', () => {
-      editSessions[si].parts.push({ name: 'Rest', minutes: 5 });
+      editSessions[si].parts.push({ name: 'Rest', minutes: 5, extendable: false });
       buildSettingsForm(editSessions);
     });
 
@@ -279,7 +332,7 @@ settingsBtn.addEventListener('click', () => {
   // Deep-clone sessions for editing.
   const editSessions = sessions.map(s => ({
     name: s.name,
-    parts: s.parts.map(p => ({ name: p.name, minutes: p.minutes })),
+    parts: s.parts.map(p => ({ name: p.name, minutes: p.minutes, extendable: p.extendable || false })),
   }));
   buildSettingsForm(editSessions);
 

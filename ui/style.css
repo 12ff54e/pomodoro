@@ -148,6 +148,34 @@ body {
   background: #777;
 }
 
+/* ---- Continue button (overtime) ---- */
+#continue-btn {
+  font-size: 1.1rem;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 12px 44px;
+  border: 2px solid #16c79a;
+  border-radius: 40px;
+  cursor: pointer;
+  background: transparent;
+  color: #16c79a;
+  margin-top: 12px;
+  transition: background 0.2s, color 0.2s;
+}
+#continue-btn:hover {
+  background: #16c79a;
+  color: #1a1a2e;
+}
+#continue-btn.hidden {
+  display: none;
+}
+
+/* ---- Overtime timer ---- */
+#timer.overtime {
+  color: #e94560;
+}
+
 /* ---- Settings overlay ---- */
 #settings-overlay {
   position: fixed;
@@ -262,6 +290,22 @@ body {
 }
 .btn-delete-part:hover {
   color: #e94560;
+}
+.extendable-label {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.7rem;
+  color: #888;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.extendable-label input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  accent-color: #16c79a;
+  cursor: pointer;
+  margin: 0;
 }
 .btn-add-part {
   background: none;

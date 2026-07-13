@@ -78,6 +78,27 @@ User clicks Stop during overtime → records only the overtime seconds (full dur
   already recorded at the zero-transition)
 ```
 
+## Releasing
+
+```bash
+# 1. Bump version in src-tauri/Cargo.toml (e.g., version = "0.3.1")
+# 2. Rebuild to update Cargo.lock with the new version
+export PATH="/c/msys64/mingw64/bin:$PATH"
+cd src-tauri && cargo build --release
+
+# 3. Commit the version bump (Cargo.toml + Cargo.lock)
+git add src-tauri/Cargo.toml src-tauri/Cargo.lock
+git commit -m "Bump version to X.Y.Z"
+git push
+
+# 4. Tag using the script (reads version from Cargo.toml)
+./tag-release.sh --push
+```
+
+The `tag-release.sh` script reads the version from `src-tauri/Cargo.toml` and creates an annotated `v<version>` tag. Pushing the tag triggers `.github/workflows/release.yml` which builds and packages the release.
+
+**Important:** After changing the version in `Cargo.toml`, always rebuild so that `Cargo.lock` reflects the new version — otherwise the lockfile will be out of sync.
+
 ## Toolchain quirk
 
 This project uses the **`stable-x86_64-pc-windows-gnu`** Rust toolchain (not MSVC). MSYS2 MinGW-w64 at `C:\msys64\mingw64\bin` provides the linker. If `dlltool.exe` or `gcc.exe` isn't found, ensure that directory is on PATH.

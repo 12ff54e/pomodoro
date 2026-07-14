@@ -59,6 +59,23 @@ body {
   transition: color 0.3s;
 }
 
+/* ---- Dock mode toggle button (top-right, next to settings) ---- */
+#dock-btn {
+  position: absolute;
+  top: 16px;
+  right: 52px;
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 20px;
+  cursor: pointer;
+  transition: color 0.2s;
+  line-height: 1;
+}
+#dock-btn:hover {
+  color: #fff;
+}
+
 /* ---- Settings gear button (top-right) ---- */
 #settings-btn {
   position: absolute;
@@ -366,4 +383,62 @@ body {
 }
 .btn-secondary:hover {
   background: #444;
+}
+
+/* ---- Dock mode (compact, always-on-top top bar) ---- */
+body.docked {
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  height: 100vh;
+}
+
+body.docked #session-label {
+  font-size: 0.65rem;
+  letter-spacing: 2px;
+  margin-bottom: 0;
+  margin-right: 2px;
+}
+
+body.docked #phase {
+  font-size: 0.65rem;
+  letter-spacing: 2px;
+  padding: 2px 10px;
+  margin-bottom: 0;
+  border-radius: 10px;
+}
+
+body.docked #timer {
+  font-size: 1.5rem;
+  margin-bottom: 0;
+  letter-spacing: 2px;
+  order: -1;
+}
+
+body.docked #dock-btn {
+  position: static;
+  font-size: 14px;
+  padding: 2px 6px;
+  color: #888;
+  order: 10;
+}
+body.docked #dock-btn:hover {
+  color: #e94560;
+}
+
+/* Hide most controls in dock mode */
+body.docked #session-left,
+body.docked #session-right,
+body.docked #settings-btn,
+body.docked #toggle-btn,
+body.docked #continue-btn,
+body.docked #daily-total {
+  display: none;
+}
+
+/* Hide settings overlay in dock mode (would overflow the tiny window) */
+body.docked #settings-overlay {
+  display: none !important;
 }

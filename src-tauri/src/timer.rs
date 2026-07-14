@@ -107,8 +107,6 @@ struct SettingsFile {
     #[serde(default)]
     #[serde(rename = "activeSession")]
     active_session: Option<usize>,
-    #[serde(default)]
-    docked: Option<bool>,
 
     // Legacy fields for migration — only present in old-format files.
     #[serde(default)]
@@ -206,36 +204,12 @@ fn save_settings(sessions: &[Session], active_index: usize) {
                 .collect(),
         })
         .collect();
-
-    // Preserve dock state if it exists in the current file.
-    let docked = load_settings_file().docked;
-    let mut file = serde_json::json!({
+    let file = serde_json::json!({
         "sessions": defs,
         "activeSession": active_index,
     });
-    if let Some(d) = docked {
-        file["docked"] = serde_json::Value::Bool(d);
-    }
     if let Ok(json) = serde_json::to_string_pretty(&file) {
         let _ = std::fs::write(settings_path(), json);
-    }
-}
-
-/// Read the `docked` flag from the settings file (defaults to false).
-pub fn load_dock_state() -> bool {
-    load_settings_file().docked.unwrap_or(false)
-}
-
-/// Persist only the docked flag without touching other settings.
-fn save_dock_state(docked: bool) {
-    let path = settings_path();
-    let mut file: serde_json::Value = match std::fs::read_to_string(&path) {
-        Ok(s) => serde_json::from_str(&s).unwrap_or(serde_json::json!({})),
-        Err(_) => serde_json::json!({}),
-    };
-    file["docked"] = serde_json::Value::Bool(docked);
-    if let Ok(json) = serde_json::to_string_pretty(&file) {
-        let _ = std::fs::write(path, json);
     }
 }
 
@@ -742,8 +716,6 @@ pub fn toggle_dock_mode(
             .set_resizable(false)
             .map_err(|e| e.to_string())?;
     }
-
-    save_dock_state(docked);
 
     let _ = app.emit(
         "dock-mode-changed",

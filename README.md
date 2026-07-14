@@ -5,9 +5,12 @@ A simple Pomodoro clock built with Rust and Tauri v2. No framework, no npm — j
 ## Features
 
 - **Work / Break timer** — alternates between configurable work and break phases
+- **Dock mode** — compact always-on-top timer bar that docks to the top of the screen
 - **Sound alerts** — beeps when a phase ends (Web Audio API)
 - **Daily tracking** — records total work time per day alongside the executable
 - **Persistent settings** — work/break durations saved to a JSON file next to the app
+- **Multiple sessions** — switch between Pomodoro, Play/Break, and custom sessions
+- **Extendable phases** — optionally let a phase run past zero (overtime) until you click Continue
 - **Small binary** — ~2.7 MB standalone executable
 
 ## Build
@@ -22,7 +25,7 @@ Requires Rust with the `stable-x86_64-pc-windows-gnu` target and MSYS2 MinGW-w64
 ./build.sh --release
 ```
 
-The release zip is created at `pomodoro-v0.1.0.zip`.
+The release zip is created at `pomodoro-v0.4.0.zip`.
 
 ## Usage
 
@@ -30,7 +33,10 @@ The release zip is created at `pomodoro-v0.1.0.zip`.
 |---|---|
 | **Start** | Begins the work timer |
 | **Stop** | Halts the timer and resets to work phase |
-| **Settings (gear icon)** | Adjust work and break durations (1–120 min) |
+| **Dock (▼)** | Shrinks window to a compact always-on-top bar at the top of the screen |
+| **Undock (▲)** | Restores the full window |
+| **Settings (gear icon)** | Adjust sessions, parts, and durations (1–120 min) |
+| **Session arrows (‹ ›)** | Switch between sessions (only when stopped) |
 
 - When work ends → auto-switches to break, 3 high beeps
 - When break ends → timer stops, resets to work, 1 low beep
@@ -38,7 +44,7 @@ The release zip is created at `pomodoro-v0.1.0.zip`.
 
 ## How it works
 
-Timer state lives entirely in the Rust backend. A background thread ticks every second and emits events to the frontend. The frontend (vanilla HTML/CSS/JS) is a dumb renderer that listens for `timer-tick` events and updates the DOM.
+Timer state lives entirely in the Rust backend. A background thread ticks every second and emits events to the frontend. The frontend (vanilla HTML/CSS/JS) is a dumb renderer that listens for `timer-tick` and `dock-mode-changed` events and updates the DOM.
 
 ```
 User clicks Start → Rust spawns tick thread

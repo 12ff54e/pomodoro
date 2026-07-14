@@ -33,9 +33,9 @@ Pomodoro desktop clock built with Rust + Tauri v2. Vanilla HTML/CSS/JS frontend 
 |---|---|
 | `main.rs` | Desktop entry point, hides console window in release |
 | `lib.rs` | App builder: registers `tauri-plugin-store`, loads persisted settings in `setup`, manages `Mutex<PomodoroState>`, registers commands |
-| `timer.rs` | State structs, 4 Tauri commands, background timer thread |
+| `timer.rs` | State structs, Tauri commands, background timer thread |
 
-**State model** (`PomodoroState`): `active_session_index`, `current_part_index`, `remaining_seconds` (i64 — negative during overtime), `settings` (PomodoroSettings), `running` flag, `paused` flag (overtime waiting for user), `overtime_work_seconds`. Wrapped in `Mutex<PomodoroState>` managed by Tauri.
+**State model** (`PomodoroState`): `active_session_index`, `current_part_index`, `remaining_seconds` (i64 — negative during overtime), `settings` (PomodoroSettings), `running` flag, `paused` flag (overtime waiting for user), `overtime_work_seconds`, `is_docked` flag (window is in compact always-on-top mode). Wrapped in `Mutex<PomodoroState>` managed by Tauri.
 
 **Data model:** Each `Session` has a name and a list of `SessionPart`s. Each part has a `name`, `minutes` (1–120), and `extendable` (bool — when true, the timer enters paused overtime at 0 instead of auto-advancing). Settings are persisted as JSON next to the executable (`pomodoro.json`). Daily work totals are tracked separately in `pomodoro_daily.json`.
 
@@ -48,6 +48,8 @@ Pomodoro desktop clock built with Rust + Tauri v2. Vanilla HTML/CSS/JS frontend 
 - `continue_timer` — advances past an extendable part that is in overtime. Flushes accumulated overtime work seconds to the daily total. Errors if not paused.
 - `update_settings` — validates (1–5 sessions, 1–10 parts each, 1–120 min), persists to JSON file, resets display if not running
 - `switch_session` — switches active session (only when stopped)
+- `toggle_dock_mode` — toggles dock mode. Sets window to 360×72, always-on-top, undecorated, positioned at top-center of the primary monitor. Undocking restores 420×520 centered window with decorations. Emits `dock-mode-changed` event.
+- `get_dock_state` — returns current `is_docked` boolean
 
 **Why `std::thread::spawn` instead of `tokio::spawn`:** Tauri v2 doesn't guarantee a Tokio runtime is active in command handlers. `tokio::spawn` panics without one. A plain OS thread with `std::thread::sleep` is simpler and always works.
 
@@ -55,9 +57,9 @@ Pomodoro desktop clock built with Rust + Tauri v2. Vanilla HTML/CSS/JS frontend 
 
 ### Frontend (`ui/`)
 
-- `index.html` — timer display (`#timer`), phase indicator (`#phase`), session label (`#session-label`), toggle button (`#toggle-btn`), continue button (`#continue-btn`, shown during overtime), session switcher arrows, settings panel overlay
-- `style.css` — dark theme (`#1a1a2e` bg), centered flexbox, `.phase-work` (red-orange) / `.phase-break` (teal-green) / `.phase-play` (cornflower blue), `.overtime` turns timer red, Continue button (teal outline → solid on hover)
-- `app.js` — uses `window.__TAURI__` (global Tauri API, enabled via `withGlobalTauri: true`). Calls `invoke()` for commands, `listen('timer-tick', ...)` for state updates. Tracks `currentPartName`/`currentSessionName`/`isRunning`/`isPaused` locally. `formatTime` handles negative seconds (overtime). Beeps on part transitions and overtime entry. Dynamic settings form builds session/part cards with extendable checkboxes.
+- `index.html` — timer display (`#timer`), phase indicator (`#phase`), session label (`#session-label`), dock button (`#dock-btn`), settings button (`#settings-btn`) both wrapped in `#controls` container, toggle button (`#toggle-btn`), continue button (`#continue-btn`, shown during overtime), session switcher arrows, settings panel overlay
+- `style.css` — dark theme (`#1a1a2e` bg), centered flexbox, `.phase-work` (red-orange) / `.phase-break` (teal-green) / `.phase-play` (cornflower blue), `.overtime` turns timer red, Continue button (teal outline → solid on hover). `body.docked` class switches to compact horizontal layout (72px tall bar, larger fonts, most controls hidden)
+- `app.js` — uses `window.__TAURI__` (global Tauri API, enabled via `withGlobalTauri: true`). Calls `invoke()` for commands, `listen('timer-tick', ...)` and `listen('dock-mode-changed', ...)` for state updates. Tracks `currentPartName`/`currentSessionName`/`isRunning`/`isPaused`/`isDocked` locally. `formatTime` handles negative seconds (overtime). Beeps on part transitions and overtime entry. Dynamic settings form builds session/part cards with extendable checkboxes. `setDocked()` toggles the `.docked` CSS class and button icon.
 
 ### Data flow
 

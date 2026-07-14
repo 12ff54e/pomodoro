@@ -666,10 +666,11 @@ pub fn toggle_dock_mode(
     app: AppHandle,
     state: State<'_, Mutex<PomodoroState>>,
 ) -> Result<bool, String> {
-    let mut s = state.lock().unwrap();
-    s.is_docked = !s.is_docked;
-    let docked = s.is_docked;
-    drop(s);
+    let currently_docked = {
+        let s = state.lock().unwrap();
+        s.is_docked
+    };
+    let docked = !currently_docked;
 
     let window = app
         .get_webview_window("main")
@@ -694,7 +695,7 @@ pub fn toggle_dock_mode(
             let phys = monitor.size();
             let scale = monitor.scale_factor();
             let logical_width = phys.width as f64 / scale;
-            let x = ((logical_width - 420.0) / 2.0).max(0.0);
+            let x = ((logical_width - 360.0) / 2.0).max(0.0);
             window
                 .set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
                     x, 0.0,
@@ -715,6 +716,12 @@ pub fn toggle_dock_mode(
         window
             .set_resizable(false)
             .map_err(|e| e.to_string())?;
+    }
+
+    // Only mutate state after all window ops succeed.
+    {
+        let mut s = state.lock().unwrap();
+        s.is_docked = docked;
     }
 
     let _ = app.emit(

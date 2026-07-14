@@ -168,8 +168,8 @@ function setDocked(docked) {
 // ---- Dock button ----
 dockBtn.addEventListener('click', async () => {
   try {
-    const docked = await invoke('toggle_dock_mode');
-    setDocked(docked);
+    await invoke('toggle_dock_mode');
+    // setDocked() is called by the 'dock-mode-changed' event listener.
   } catch (e) {
     console.error('toggle_dock_mode failed:', e);
   }
@@ -222,8 +222,8 @@ sessionRightBtn.addEventListener('click', async () => {
 document.addEventListener('keydown', async (e) => {
   if (e.target.tagName === 'INPUT') return;
 
-  // Space/Enter to continue when paused (overtime).
-  if (isPaused && (e.key === ' ' || e.key === 'Enter')) {
+  // Space/Enter to continue when paused (overtime) — not in dock mode.
+  if (!isDocked && isPaused && (e.key === ' ' || e.key === 'Enter')) {
     e.preventDefault();
     try { await invoke('continue_timer'); } catch (_) {}
     return;

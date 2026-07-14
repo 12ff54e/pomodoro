@@ -712,7 +712,7 @@ pub fn toggle_dock_mode(
             .set_resizable(true)
             .map_err(|e| e.to_string())?;
         window
-            .set_size(tauri::Size::Logical(tauri::LogicalSize::new(420.0, 56.0)))
+            .set_size(tauri::Size::Logical(tauri::LogicalSize::new(420.0, 72.0)))
             .map_err(|e| e.to_string())?;
 
         // Position at top-center of the primary monitor.

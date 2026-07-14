@@ -28,7 +28,7 @@ pub fn run() {
                     let _ = window.set_always_on_top(true);
                     let _ = window.set_resizable(true);
                     let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
-                        420.0, 56.0,
+                        420.0, 72.0,
                     )));
                     if let Ok(Some(monitor)) = window.primary_monitor() {
                         let phys = monitor.size();

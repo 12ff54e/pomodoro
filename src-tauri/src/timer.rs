@@ -73,6 +73,8 @@ pub struct PomodoroState {
     pub paused: bool,
     /// Accumulated overtime seconds for the current Work part (flushed on Continue/Stop).
     pub overtime_work_seconds: u64,
+    /// Whether the window is in dock mode (small, always-on-top, docked to top of screen).
+    pub is_docked: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -657,4 +659,80 @@ pub fn switch_session(
 
     let _ = app.emit("timer-tick", &tick);
     Ok(())
+}
+
+#[tauri::command]
+pub fn toggle_dock_mode(
+    app: AppHandle,
+    state: State<'_, Mutex<PomodoroState>>,
+) -> Result<bool, String> {
+    let currently_docked = {
+        let s = state.lock().unwrap();
+        s.is_docked
+    };
+    let docked = !currently_docked;
+
+    let window = app
+        .get_webview_window("main")
+        .ok_or("No main window found")?;
+
+    if docked {
+        window
+            .set_decorations(false)
+            .map_err(|e| e.to_string())?;
+        window
+            .set_always_on_top(true)
+            .map_err(|e| e.to_string())?;
+        window
+            .set_resizable(true)
+            .map_err(|e| e.to_string())?;
+        window
+            .set_size(tauri::Size::Logical(tauri::LogicalSize::new(360.0, 72.0)))
+            .map_err(|e| e.to_string())?;
+
+        // Position at top-center of the primary monitor.
+        if let Ok(Some(monitor)) = window.primary_monitor() {
+            let phys = monitor.size();
+            let scale = monitor.scale_factor();
+            let logical_width = phys.width as f64 / scale;
+            let x = ((logical_width - 360.0) / 2.0).max(0.0);
+            window
+                .set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
+                    x, 0.0,
+                )))
+                .map_err(|e| e.to_string())?;
+        }
+    } else {
+        window
+            .set_decorations(true)
+            .map_err(|e| e.to_string())?;
+        window
+            .set_always_on_top(false)
+            .map_err(|e| e.to_string())?;
+        window
+            .set_size(tauri::Size::Logical(tauri::LogicalSize::new(420.0, 520.0)))
+            .map_err(|e| e.to_string())?;
+        window.center().map_err(|e| e.to_string())?;
+        window
+            .set_resizable(false)
+            .map_err(|e| e.to_string())?;
+    }
+
+    // Only mutate state after all window ops succeed.
+    {
+        let mut s = state.lock().unwrap();
+        s.is_docked = docked;
+    }
+
+    let _ = app.emit(
+        "dock-mode-changed",
+        serde_json::json!({ "docked": docked }),
+    );
+
+    Ok(docked)
+}
+
+#[tauri::command]
+pub fn get_dock_state(state: State<'_, Mutex<PomodoroState>>) -> bool {
+    state.lock().unwrap().is_docked
 }

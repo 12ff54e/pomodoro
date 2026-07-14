@@ -8,6 +8,7 @@ let isRunning = false;
 let isPaused = false;
 let wasRunning = false;
 let lastPartName = '';
+let isDocked = false;
 
 // ---- Audio context (lazy, created on first beep) ----
 let audioCtx = null;
@@ -41,6 +42,7 @@ function beep(freq, durationMs, count = 1) {
 const timerEl = document.getElementById('timer');
 const phaseEl = document.getElementById('phase');
 const sessionLabelEl = document.getElementById('session-label');
+const dockBtn = document.getElementById('dock-btn');
 const toggleBtn = document.getElementById('toggle-btn');
 const continueBtn = document.getElementById('continue-btn');
 const sessionLeftBtn = document.getElementById('session-left');
@@ -145,6 +147,34 @@ listen('timer-tick', (event) => {
   render(event.payload);
 });
 
+listen('dock-mode-changed', (event) => {
+  setDocked(event.payload.docked);
+});
+
+/** Update UI for current dock state. */
+function setDocked(docked) {
+  isDocked = docked;
+  if (docked) {
+    document.body.classList.add('docked');
+    dockBtn.innerHTML = '&#9650;';  // ▲  up arrow = undock
+    dockBtn.title = 'Undock';
+  } else {
+    document.body.classList.remove('docked');
+    dockBtn.innerHTML = '&#9660;';  // ▼  down arrow = dock
+    dockBtn.title = 'Dock to top';
+  }
+}
+
+// ---- Dock button ----
+dockBtn.addEventListener('click', async () => {
+  try {
+    await invoke('toggle_dock_mode');
+    // setDocked() is called by the 'dock-mode-changed' event listener.
+  } catch (e) {
+    console.error('toggle_dock_mode failed:', e);
+  }
+});
+
 // ---- Toggle button ----
 toggleBtn.addEventListener('click', async () => {
   try {
@@ -192,8 +222,8 @@ sessionRightBtn.addEventListener('click', async () => {
 document.addEventListener('keydown', async (e) => {
   if (e.target.tagName === 'INPUT') return;
 
-  // Space/Enter to continue when paused (overtime).
-  if (isPaused && (e.key === ' ' || e.key === 'Enter')) {
+  // Space/Enter to continue when paused (overtime) — not in dock mode.
+  if (!isDocked && isPaused && (e.key === ' ' || e.key === 'Enter')) {
     e.preventDefault();
     try { await invoke('continue_timer'); } catch (_) {}
     return;
@@ -395,14 +425,16 @@ overlay.addEventListener('click', (e) => {
 // ---- Initial load ----
 (async () => {
   try {
-    const [tick, daily, settings] = await Promise.all([
+    const [tick, daily, settings, docked] = await Promise.all([
       invoke('get_state'),
       invoke('get_daily_total'),
       invoke('get_settings'),
+      invoke('get_dock_state'),
     ]);
     sessions = settings.sessions;
     render(tick);
     dailyTotalEl.textContent = 'Today: ' + formatDailyTotal(daily);
+    setDocked(docked);
   } catch (e) {
     console.error('init failed:', e);
   }

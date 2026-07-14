@@ -59,19 +59,33 @@ body {
   transition: color 0.3s;
 }
 
-/* ---- Settings gear button (top-right) ---- */
-#settings-btn {
+#controls {
   position: absolute;
   top: 16px;
   right: 16px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+#controls > button {
   background: none;
   border: none;
   color: #888;
-  font-size: 28px;
+  font-size: 24px;
   cursor: pointer;
   transition: color 0.2s;
+  margin: 0 4px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
 }
-#settings-btn:hover {
+
+#controls > button:hover {
   color: #fff;
 }
 
@@ -366,4 +380,69 @@ body {
 }
 .btn-secondary:hover {
   background: #444;
+}
+
+/* ---- Dock mode (compact, always-on-top top bar) ---- */
+body.docked {
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  height: 100vh;
+}
+
+body.docked #session-label {
+  display: none;
+}
+
+body.docked #phase {
+  font-size: 1rem;
+  letter-spacing: 2px;
+  padding: 3px 12px;
+  margin-bottom: 0;
+  border-radius: 12px;
+}
+
+body.docked #timer {
+  font-size: 2.4rem;
+  margin-bottom: 0;
+  letter-spacing: 2px;
+  order: -1;
+}
+
+body.docked #dock-btn {
+  position: static;
+  width: auto;
+  height: auto;
+  font-size: 22px;
+  padding: 2px 6px;
+  color: #888;
+  order: 10;
+}
+body.docked #dock-btn:hover {
+  color: #e94560;
+}
+
+body.docked #controls {
+  position: static;
+  top: auto;
+  right: auto;
+  gap: 6px;
+  order: 11;
+}
+
+/* Hide most controls in dock mode */
+body.docked #session-left,
+body.docked #session-right,
+body.docked #settings-btn,
+body.docked #toggle-btn,
+body.docked #continue-btn,
+body.docked #daily-total {
+  display: none;
+}
+
+/* Hide settings overlay in dock mode (would overflow the tiny window) */
+body.docked #settings-overlay {
+  display: none !important;
 }

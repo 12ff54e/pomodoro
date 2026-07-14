@@ -63,13 +63,19 @@ body {
 #dock-btn {
   position: absolute;
   top: 16px;
-  right: 52px;
+  right: 50px;
   background: none;
   border: none;
   color: #888;
-  font-size: 20px;
+  font-size: 22px;
   cursor: pointer;
   transition: color 0.2s;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   line-height: 1;
 }
 #dock-btn:hover {
@@ -396,10 +402,7 @@ body.docked {
 }
 
 body.docked #session-label {
-  font-size: 0.65rem;
-  letter-spacing: 2px;
-  margin-bottom: 0;
-  margin-right: 2px;
+  display: none;
 }
 
 body.docked #phase {
@@ -419,6 +422,8 @@ body.docked #timer {
 
 body.docked #dock-btn {
   position: static;
+  width: auto;
+  height: auto;
   font-size: 14px;
   padding: 2px 6px;
   color: #888;

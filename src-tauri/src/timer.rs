@@ -703,6 +703,9 @@ pub fn toggle_dock_mode(
 
     if docked {
         window
+            .set_decorations(false)
+            .map_err(|e| e.to_string())?;
+        window
             .set_always_on_top(true)
             .map_err(|e| e.to_string())?;
         window
@@ -725,6 +728,9 @@ pub fn toggle_dock_mode(
                 .map_err(|e| e.to_string())?;
         }
     } else {
+        window
+            .set_decorations(true)
+            .map_err(|e| e.to_string())?;
         window
             .set_always_on_top(false)
             .map_err(|e| e.to_string())?;

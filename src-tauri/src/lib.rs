@@ -24,6 +24,7 @@ pub fn run() {
             // Apply docked window state on startup if persisted.
             if is_docked {
                 if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_decorations(false);
                     let _ = window.set_always_on_top(true);
                     let _ = window.set_resizable(true);
                     let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(

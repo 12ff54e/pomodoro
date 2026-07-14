@@ -59,17 +59,23 @@ body {
   transition: color 0.3s;
 }
 
-/* ---- Dock mode toggle button (top-right, next to settings) ---- */
-#dock-btn {
+#controls {
   position: absolute;
   top: 16px;
-  right: 50px;
+  right: 16px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+#controls > button {
   background: none;
   border: none;
   color: #888;
-  font-size: 22px;
+  font-size: 24px;
   cursor: pointer;
   transition: color 0.2s;
+  margin: 0 4px;
   width: 28px;
   height: 28px;
   display: flex;
@@ -78,23 +84,8 @@ body {
   padding: 0;
   line-height: 1;
 }
-#dock-btn:hover {
-  color: #fff;
-}
 
-/* ---- Settings gear button (top-right) ---- */
-#settings-btn {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  background: none;
-  border: none;
-  color: #888;
-  font-size: 28px;
-  cursor: pointer;
-  transition: color 0.2s;
-}
-#settings-btn:hover {
+#controls > button:hover {
   color: #fff;
 }
 
@@ -431,6 +422,14 @@ body.docked #dock-btn {
 }
 body.docked #dock-btn:hover {
   color: #e94560;
+}
+
+body.docked #controls {
+  position: static;
+  top: auto;
+  right: auto;
+  gap: 6px;
+  order: 11;
 }
 
 /* Hide most controls in dock mode */

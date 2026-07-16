@@ -329,6 +329,40 @@ fn build_tick(state: &PomodoroState, daily_total: u64) -> TimerTick {
     }
 }
 
+/// Validate sessions for update_settings. Extracted for testability.
+fn validate_sessions(sessions: &[Session]) -> Result<(), String> {
+    if sessions.is_empty() || sessions.len() > 5 {
+        return Err("Must have between 1 and 5 sessions".into());
+    }
+    for (si, session) in sessions.iter().enumerate() {
+        if session.name.trim().is_empty() {
+            return Err(format!("Session {} name cannot be empty", si + 1));
+        }
+        if session.parts.is_empty() || session.parts.len() > 10 {
+            return Err(format!(
+                "Session '{}' must have between 1 and 10 parts",
+                session.name
+            ));
+        }
+        for (pi, part) in session.parts.iter().enumerate() {
+            if part.name.trim().is_empty() {
+                return Err(format!(
+                    "Part {} in session '{}' name cannot be empty",
+                    pi + 1,
+                    session.name
+                ));
+            }
+            if part.minutes < 1 || part.minutes > 120 {
+                return Err(format!(
+                    "Part '{}' in session '{}' must be between 1 and 120 minutes",
+                    part.name, session.name
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
@@ -560,36 +594,7 @@ pub fn update_settings(
     state: State<'_, Mutex<PomodoroState>>,
     sessions: Vec<Session>,
 ) -> Result<PomodoroSettings, String> {
-    // Validate.
-    if sessions.is_empty() || sessions.len() > 5 {
-        return Err("Must have between 1 and 5 sessions".into());
-    }
-    for (si, session) in sessions.iter().enumerate() {
-        if session.name.trim().is_empty() {
-            return Err(format!("Session {} name cannot be empty", si + 1));
-        }
-        if session.parts.is_empty() || session.parts.len() > 10 {
-            return Err(format!(
-                "Session '{}' must have between 1 and 10 parts",
-                session.name
-            ));
-        }
-        for (pi, part) in session.parts.iter().enumerate() {
-            if part.name.trim().is_empty() {
-                return Err(format!(
-                    "Part {} in session '{}' name cannot be empty",
-                    pi + 1,
-                    session.name
-                ));
-            }
-            if part.minutes < 1 || part.minutes > 120 {
-                return Err(format!(
-                    "Part '{}' in session '{}' must be between 1 and 120 minutes",
-                    part.name, session.name
-                ));
-            }
-        }
-    }
+    validate_sessions(&sessions)?;
 
     let new_settings = PomodoroSettings {
         sessions: sessions.clone(),
@@ -735,4 +740,295 @@ pub fn toggle_dock_mode(
 #[tauri::command]
 pub fn get_dock_state(state: State<'_, Mutex<PomodoroState>>) -> bool {
     state.lock().unwrap().is_docked
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- PomodoroSettings::default ----
+
+    #[test]
+    fn default_settings_structure() {
+        let settings = PomodoroSettings::default();
+        assert_eq!(settings.sessions.len(), 1);
+        let session = &settings.sessions[0];
+        assert_eq!(session.name, "Pomodoro");
+        assert_eq!(session.parts.len(), 2);
+        assert_eq!(session.parts[0].name, "Work");
+        assert_eq!(session.parts[0].minutes, 25);
+        assert!(!session.parts[0].extendable);
+        assert_eq!(session.parts[1].name, "Break");
+        assert_eq!(session.parts[1].minutes, 5);
+        assert!(!session.parts[1].extendable);
+    }
+
+    // ---- today_string ----
+
+    #[test]
+    fn today_string_format() {
+        let today = today_string();
+        // Must be exactly "YYYY-MM-DD"
+        assert_eq!(today.len(), 10, "expected YYYY-MM-DD, got '{}'", today);
+        assert_eq!(&today[4..5], "-");
+        assert_eq!(&today[7..8], "-");
+        let year: u32 = today[0..4].parse().unwrap();
+        let month: u32 = today[5..7].parse().unwrap();
+        let day: u32 = today[8..10].parse().unwrap();
+        assert!(year >= 2024);
+        assert!(month >= 1 && month <= 12);
+        assert!(day >= 1 && day <= 31);
+    }
+
+    // ---- legacy_sessions ----
+
+    #[test]
+    fn legacy_migration_pomodoro_defaults() {
+        // Only work_minutes and break_minutes set.
+        let file = SettingsFile {
+            sessions: None,
+            active_session: None,
+            work_minutes: Some(30),
+            break_minutes: Some(10),
+            play_minutes: None,
+            play_break_minutes: None,
+            session_type: None,
+        };
+        let sessions = legacy_sessions(&file);
+        assert_eq!(sessions.len(), 2);
+        // First session: Pomodoro (Work 30 / Break 10).
+        assert_eq!(sessions[0].name, "Pomodoro");
+        assert_eq!(sessions[0].parts[0].name, "Work");
+        assert_eq!(sessions[0].parts[0].minutes, 30);
+        assert_eq!(sessions[0].parts[1].name, "Break");
+        assert_eq!(sessions[0].parts[1].minutes, 10);
+        // Second session: Play / Break (defaults 25/5).
+        assert_eq!(sessions[1].name, "Play / Break");
+        assert_eq!(sessions[1].parts[0].name, "Play");
+        assert_eq!(sessions[1].parts[0].minutes, 25);
+        assert_eq!(sessions[1].parts[1].name, "Break");
+        assert_eq!(sessions[1].parts[1].minutes, 5);
+    }
+
+    #[test]
+    fn legacy_migration_all_fields() {
+        // All four minute fields set.
+        let file = SettingsFile {
+            sessions: None,
+            active_session: None,
+            work_minutes: Some(25),
+            break_minutes: Some(5),
+            play_minutes: Some(45),
+            play_break_minutes: Some(15),
+            session_type: None,
+        };
+        let sessions = legacy_sessions(&file);
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[1].parts[0].minutes, 45);
+        assert_eq!(sessions[1].parts[1].minutes, 15);
+    }
+
+    #[test]
+    fn legacy_migration_empty_uses_defaults() {
+        let file = SettingsFile {
+            sessions: None,
+            active_session: None,
+            work_minutes: None,
+            break_minutes: None,
+            play_minutes: None,
+            play_break_minutes: None,
+            session_type: None,
+        };
+        let sessions = legacy_sessions(&file);
+        assert_eq!(sessions.len(), 2);
+        // Defaults: 25/5 for both.
+        assert_eq!(sessions[0].parts[0].minutes, 25);
+        assert_eq!(sessions[0].parts[1].minutes, 5);
+        assert_eq!(sessions[1].parts[0].minutes, 25);
+        assert_eq!(sessions[1].parts[1].minutes, 5);
+    }
+
+    // ---- build_tick ----
+
+    #[test]
+    fn build_tick_basic() {
+        let settings = PomodoroSettings {
+            sessions: vec![Session {
+                name: "Test Session".into(),
+                parts: vec![
+                    SessionPart { name: "Focus".into(), minutes: 25, extendable: false },
+                    SessionPart { name: "Rest".into(), minutes: 5, extendable: false },
+                ],
+            }],
+        };
+        let state = PomodoroState {
+            active_session_index: 0,
+            current_part_index: 0,
+            remaining_seconds: 1500,
+            settings,
+            running: true,
+            paused: false,
+            overtime_work_seconds: 0,
+            is_docked: false,
+        };
+        let tick = build_tick(&state, 3600);
+        assert_eq!(tick.remaining_seconds, 1500);
+        assert_eq!(tick.session_name, "Test Session");
+        assert_eq!(tick.part_name, "Focus");
+        assert!(tick.running);
+        assert!(!tick.paused);
+        assert_eq!(tick.daily_total_seconds, 3600);
+        assert_eq!(tick.active_session_index, 0);
+        assert_eq!(tick.session_count, 1);
+    }
+
+    #[test]
+    fn build_tick_paused() {
+        let settings = PomodoroSettings {
+            sessions: vec![Session {
+                name: "S".into(),
+                parts: vec![
+                    SessionPart { name: "W".into(), minutes: 1, extendable: true },
+                ],
+            }],
+        };
+        let state = PomodoroState {
+            active_session_index: 0,
+            current_part_index: 0,
+            remaining_seconds: -5,
+            settings,
+            running: true,
+            paused: true,
+            overtime_work_seconds: 5,
+            is_docked: false,
+        };
+        let tick = build_tick(&state, 0);
+        assert_eq!(tick.remaining_seconds, -5);
+        assert!(tick.paused);
+        assert_eq!(tick.part_name, "W");
+    }
+
+    // ---- validate_sessions ----
+
+    #[test]
+    fn validate_sessions_empty() {
+        assert!(validate_sessions(&[]).is_err());
+    }
+
+    #[test]
+    fn validate_sessions_too_many() {
+        let too_many: Vec<Session> = (0..6)
+            .map(|i| Session { name: format!("S{}", i), parts: vec![] })
+            .collect();
+        assert!(validate_sessions(&too_many).is_err());
+    }
+
+    #[test]
+    fn validate_sessions_five_ok() {
+        let five: Vec<Session> = (0..5)
+            .map(|i| Session {
+                name: format!("S{}", i),
+                parts: vec![SessionPart { name: "P".into(), minutes: 1, extendable: false }],
+            })
+            .collect();
+        assert!(validate_sessions(&five).is_ok());
+    }
+
+    #[test]
+    fn validate_empty_session_name() {
+        let sessions = vec![Session {
+            name: "   ".into(),
+            parts: vec![SessionPart { name: "P".into(), minutes: 1, extendable: false }],
+        }];
+        assert!(validate_sessions(&sessions).is_err());
+    }
+
+    #[test]
+    fn validate_zero_parts() {
+        let sessions = vec![Session { name: "S".into(), parts: vec![] }];
+        assert!(validate_sessions(&sessions).is_err());
+    }
+
+    #[test]
+    fn validate_eleven_parts() {
+        let sessions = vec![Session {
+            name: "S".into(),
+            parts: (0..11)
+                .map(|i| SessionPart { name: format!("P{}", i), minutes: 1, extendable: false })
+                .collect(),
+        }];
+        assert!(validate_sessions(&sessions).is_err());
+    }
+
+    #[test]
+    fn validate_ten_parts_ok() {
+        let sessions = vec![Session {
+            name: "S".into(),
+            parts: (0..10)
+                .map(|i| SessionPart { name: format!("P{}", i), minutes: 1, extendable: false })
+                .collect(),
+        }];
+        assert!(validate_sessions(&sessions).is_ok());
+    }
+
+    #[test]
+    fn validate_empty_part_name() {
+        let sessions = vec![Session {
+            name: "S".into(),
+            parts: vec![SessionPart { name: "  ".into(), minutes: 1, extendable: false }],
+        }];
+        assert!(validate_sessions(&sessions).is_err());
+    }
+
+    #[test]
+    fn validate_minutes_zero() {
+        let sessions = vec![Session {
+            name: "S".into(),
+            parts: vec![SessionPart { name: "P".into(), minutes: 0, extendable: false }],
+        }];
+        assert!(validate_sessions(&sessions).is_err());
+    }
+
+    #[test]
+    fn validate_minutes_121() {
+        let sessions = vec![Session {
+            name: "S".into(),
+            parts: vec![SessionPart { name: "P".into(), minutes: 121, extendable: false }],
+        }];
+        assert!(validate_sessions(&sessions).is_err());
+    }
+
+    #[test]
+    fn validate_minutes_120_ok() {
+        let sessions = vec![Session {
+            name: "S".into(),
+            parts: vec![SessionPart { name: "P".into(), minutes: 120, extendable: false }],
+        }];
+        assert!(validate_sessions(&sessions).is_ok());
+    }
+
+    #[test]
+    fn validate_valid_config() {
+        let sessions = vec![
+            Session {
+                name: "Pomodoro".into(),
+                parts: vec![
+                    SessionPart { name: "Work".into(), minutes: 25, extendable: false },
+                    SessionPart { name: "Break".into(), minutes: 5, extendable: false },
+                ],
+            },
+            Session {
+                name: "Play / Break".into(),
+                parts: vec![
+                    SessionPart { name: "Play".into(), minutes: 25, extendable: true },
+                    SessionPart { name: "Break".into(), minutes: 10, extendable: false },
+                ],
+            },
+        ];
+        assert!(validate_sessions(&sessions).is_ok());
+    }
 }

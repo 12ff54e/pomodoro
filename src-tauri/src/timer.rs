@@ -259,10 +259,9 @@ fn days_since_epoch_to_date(days: i64) -> String {
     format!("{:04}-{:02}-{:02}", y, m, d)
 }
 
-/// Load settings, migrating from the old format if necessary.
-pub fn load_settings() -> (PomodoroSettings, usize) {
-    let file = load_settings_file();
-
+/// Convert a parsed settings file into domain model + active index.
+/// Extracted for testability — test the three-branch logic without touching disk.
+fn settings_from_file(file: SettingsFile) -> (PomodoroSettings, usize) {
     if let Some(sessions) = file.sessions {
         // New format — convert SessionDef → Session.
         let sessions: Vec<Session> = sessions
@@ -280,23 +279,37 @@ pub fn load_settings() -> (PomodoroSettings, usize) {
                     .collect(),
             })
             .collect();
-        let active = file.active_session.unwrap_or(0).min(sessions.len().saturating_sub(1));
+        let active = file
+            .active_session
+            .unwrap_or(0)
+            .min(sessions.len().saturating_sub(1));
         (PomodoroSettings { sessions }, active)
     } else if file.work_minutes.is_some() || file.play_minutes.is_some() {
-        // Old format — migrate.
+        // Old format — migrate from legacy fields.
         let sessions = legacy_sessions(&file);
         let active = match file.session_type.as_deref() {
             Some("playBreak" | "playbreak") => 1,
             _ => 0,
         };
-        // Save in new format right away.
-        save_settings(&sessions, active);
         (PomodoroSettings { sessions }, active)
     } else {
         // No file yet — use defaults.
         let settings = PomodoroSettings::default();
         (settings, 0)
     }
+}
+
+/// Load settings from disk, migrating from the old format if necessary.
+pub fn load_settings() -> (PomodoroSettings, usize) {
+    let file = load_settings_file();
+    let has_legacy = file.sessions.is_none()
+        && (file.work_minutes.is_some() || file.play_minutes.is_some());
+    let (settings, active) = settings_from_file(file);
+    if has_legacy {
+        // Persist the migration to disk so we don't migrate again.
+        save_settings(&settings.sessions, active);
+    }
+    (settings, active)
 }
 
 /// Reads today's total work seconds from the daily file.
@@ -1208,5 +1221,165 @@ mod tests {
         assert_eq!(days_since_epoch_to_date(11016), "2000-02-29");
         // 2000-03-01 = day 11017
         assert_eq!(days_since_epoch_to_date(11017), "2000-03-01");
+    }
+
+    // ---- settings_from_file ----
+
+    #[test]
+    fn settings_from_file_new_format() {
+        // A new-format file with two sessions, extendable work part.
+        let file = SettingsFile {
+            sessions: Some(vec![
+                SessionDef {
+                    name: "Pomodoro".into(),
+                    parts: vec![
+                        PartDef { name: "Work".into(), minutes: 25, extendable: true },
+                        PartDef { name: "Break".into(), minutes: 5, extendable: false },
+                    ],
+                },
+                SessionDef {
+                    name: "Deep Focus".into(),
+                    parts: vec![
+                        PartDef { name: "Focus".into(), minutes: 50, extendable: true },
+                        PartDef { name: "Rest".into(), minutes: 10, extendable: false },
+                    ],
+                },
+            ]),
+            active_session: Some(1),
+            ..Default::default()
+        };
+        let (settings, active) = settings_from_file(file);
+        assert_eq!(settings.sessions.len(), 2);
+        assert_eq!(settings.sessions[0].parts[0].extendable, true);
+        assert_eq!(settings.sessions[1].name, "Deep Focus");
+        assert_eq!(settings.sessions[1].parts[0].minutes, 50);
+        assert_eq!(settings.sessions[1].parts[1].minutes, 10);
+        assert_eq!(active, 1);
+    }
+
+    #[test]
+    fn settings_from_file_active_index_clamped() {
+        // Active index beyond bounds should be clamped to last valid index.
+        let file = SettingsFile {
+            sessions: Some(vec![
+                SessionDef {
+                    name: "A".into(),
+                    parts: vec![PartDef { name: "X".into(), minutes: 1, extendable: false }],
+                },
+                SessionDef {
+                    name: "B".into(),
+                    parts: vec![PartDef { name: "Y".into(), minutes: 1, extendable: false }],
+                },
+            ]),
+            active_session: Some(99), // way out of bounds
+            ..Default::default()
+        };
+        let (settings, active) = settings_from_file(file);
+        assert_eq!(active, 1); // clamped to sessions.len() - 1
+        assert_eq!(settings.sessions.len(), 2);
+    }
+
+    #[test]
+    fn settings_from_file_new_format_no_active() {
+        // active_session missing from file → default to 0.
+        let file = SettingsFile {
+            sessions: Some(vec![
+                SessionDef {
+                    name: "Solo".into(),
+                    parts: vec![PartDef { name: "Task".into(), minutes: 30, extendable: false }],
+                },
+            ]),
+            active_session: None,
+            ..Default::default()
+        };
+        let (_, active) = settings_from_file(file);
+        assert_eq!(active, 0);
+    }
+
+    #[test]
+    fn settings_from_file_empty_defaults() {
+        // Completely empty SettingsFile → PomodoroSettings::default().
+        let file = SettingsFile::default();
+        let (settings, active) = settings_from_file(file);
+        assert_eq!(settings.sessions.len(), 1);
+        assert_eq!(settings.sessions[0].name, "Pomodoro");
+        assert_eq!(settings.sessions[0].parts.len(), 2);
+        assert_eq!(settings.sessions[0].parts[0].name, "Work");
+        assert_eq!(settings.sessions[0].parts[0].minutes, 25);
+        assert_eq!(settings.sessions[0].parts[1].name, "Break");
+        assert_eq!(settings.sessions[0].parts[1].minutes, 5);
+        assert_eq!(active, 0);
+    }
+
+    // ---- JSON round-trip ----
+
+    #[test]
+    fn json_roundtrip_preserves_extendable() {
+        // Session → JSON → Session — all fields survive, especially extendable.
+        let original = Session {
+            name: "Test".into(),
+            parts: vec![
+                SessionPart { name: "Focus".into(), minutes: 45, extendable: true },
+                SessionPart { name: "Break".into(), minutes: 15, extendable: false },
+            ],
+        };
+        let json = serde_json::to_string(&original).expect("serialize");
+        let parsed: Session = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.name, "Test");
+        assert_eq!(parsed.parts.len(), 2);
+        assert_eq!(parsed.parts[0].name, "Focus");
+        assert_eq!(parsed.parts[0].minutes, 45);
+        assert_eq!(parsed.parts[0].extendable, true);
+        assert_eq!(parsed.parts[1].name, "Break");
+        assert_eq!(parsed.parts[1].minutes, 15);
+        assert_eq!(parsed.parts[1].extendable, false);
+    }
+
+    #[test]
+    fn json_deserialize_missing_extendable_defaults_false() {
+        // If the JSON omits "extendable", serde should default it to false.
+        let json = r#"{"name":"Work","minutes":25}"#;
+        let part: SessionPart = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(part.name, "Work");
+        assert_eq!(part.minutes, 25);
+        assert!(!part.extendable, "missing extendable should default to false");
+    }
+
+    #[test]
+    fn json_deserialize_extendable_true() {
+        let json = r#"{"name":"Work","minutes":25,"extendable":true}"#;
+        let part: SessionPart = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(part.name, "Work");
+        assert_eq!(part.minutes, 25);
+        assert!(part.extendable);
+    }
+
+    #[test]
+    fn json_settings_file_roundtrip() {
+        // Full SettingsFile → JSON → SettingsFile round-trip.
+        let file = SettingsFile {
+            sessions: Some(vec![
+                SessionDef {
+                    name: "Pomodoro".into(),
+                    parts: vec![
+                        PartDef { name: "Work".into(), minutes: 30, extendable: true },
+                        PartDef { name: "Break".into(), minutes: 10, extendable: false },
+                    ],
+                },
+            ]),
+            active_session: Some(0),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&file).expect("serialize");
+        let parsed: SettingsFile = serde_json::from_str(&json).expect("deserialize");
+        let sessions = parsed.sessions.expect("sessions present");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].name, "Pomodoro");
+        assert_eq!(sessions[0].parts[0].minutes, 30);
+        assert_eq!(sessions[0].parts[0].extendable, true);
+        assert_eq!(sessions[0].parts[1].name, "Break");
+        assert_eq!(sessions[0].parts[1].minutes, 10);
+        assert_eq!(sessions[0].parts[1].extendable, false);
+        assert_eq!(parsed.active_session, Some(0));
     }
 }

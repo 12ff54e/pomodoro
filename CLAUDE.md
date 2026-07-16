@@ -15,6 +15,9 @@ cd src-tauri && cargo build
 # Run tests
 cd src-tauri && cargo test
 
+# Run UI tests (requires Node.js 18+; no npm install needed)
+node ui/test/test.js
+
 # Build (release)
 cd src-tauri && cargo build --release
 

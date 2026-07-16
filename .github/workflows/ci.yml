@@ -27,11 +27,14 @@ jobs:
           rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
           rustup default stable-x86_64-pc-windows-gnu
 
-      - name: Test
+      - name: Test (Rust)
         run: |
           $env:PATH = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin;$env:PATH"
           cd src-tauri
           cargo test --release
+
+      - name: Test (UI)
+        run: node ui/test/test.js
 
       - name: Build (release)
         run: |

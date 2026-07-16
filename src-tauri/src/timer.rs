@@ -239,8 +239,12 @@ fn today_string() -> String {
         .unwrap_or_default()
         .as_secs();
     let days = (secs / 86400) as i64;
+    days_since_epoch_to_date(days)
+}
 
-    // Convert days since epoch to Gregorian date (Howard Hinnant's algorithm).
+/// Convert days since Unix epoch to "YYYY-MM-DD" (Howard Hinnant's algorithm).
+/// Extracted for testability — pass known day counts to verify calendar math.
+fn days_since_epoch_to_date(days: i64) -> String {
     let z = days + 719468;
     let era = z.div_euclid(146097);
     let doe = z - era * 146097;
@@ -361,6 +365,71 @@ fn validate_sessions(sessions: &[Session]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Calculate work seconds to record when stopping a running timer.
+/// Returns `None` if the current part is not a "work" part or no time has elapsed.
+fn stop_work_seconds(
+    part_name: &str,
+    part_full_seconds: u64,
+    paused: bool,
+    remaining_seconds: i64,
+    overtime_work_seconds: u64,
+) -> Option<u64> {
+    if !part_name.eq_ignore_ascii_case("work") {
+        return None;
+    }
+    if paused {
+        // The full duration was already recorded when the part hit zero;
+        // only the overtime seconds (accumulated past zero) are new.
+        if overtime_work_seconds > 0 {
+            Some(overtime_work_seconds)
+        } else {
+            None
+        }
+    } else {
+        let full = part_full_seconds as i64;
+        let elapsed = full.saturating_sub(remaining_seconds).max(0) as u64;
+        if elapsed > 0 {
+            Some(elapsed)
+        } else {
+            None
+        }
+    }
+}
+
+/// Result of advancing past an extendable (paused) part.
+struct ContinueAdvance {
+    new_part_index: usize,
+    new_remaining_seconds: i64,
+    new_running: bool,
+    new_paused: bool,
+}
+
+/// Figure out what state to transition to when the user clicks Continue
+/// on an extendable part that is in paused overtime.
+fn continue_advance(
+    current_part_index: usize,
+    part_seconds: &[i64],
+    first_part_seconds: i64,
+) -> ContinueAdvance {
+    if current_part_index + 1 < part_seconds.len() {
+        // Advance to the next part.
+        ContinueAdvance {
+            new_part_index: current_part_index + 1,
+            new_remaining_seconds: part_seconds[current_part_index + 1],
+            new_running: true,
+            new_paused: false,
+        }
+    } else {
+        // Last part — stop and reset.
+        ContinueAdvance {
+            new_part_index: 0,
+            new_remaining_seconds: first_part_seconds,
+            new_running: false,
+            new_paused: false,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -507,25 +576,17 @@ pub fn stop_timer(
     // Record partial work time.
     let sessions = &s.settings.sessions;
     let part = &sessions[s.active_session_index].parts[s.current_part_index];
-    if part.name.eq_ignore_ascii_case("work") {
-        if s.paused {
-            // Full duration already recorded when part hit zero;
-            // only the overtime seconds are new.
-            let overtime = s.overtime_work_seconds;
-            if overtime > 0 {
-                drop(s);
-                add_daily_work_seconds(overtime);
-                s = state.lock().unwrap();
-            }
-        } else {
-            let full = (part.minutes * 60) as i64;
-            let elapsed = full.saturating_sub(s.remaining_seconds).max(0) as u64;
-            if elapsed > 0 {
-                drop(s);
-                add_daily_work_seconds(elapsed);
-                s = state.lock().unwrap();
-            }
-        }
+    let full_seconds = (part.minutes * 60) as u64;
+    if let Some(seconds) = stop_work_seconds(
+        &part.name,
+        full_seconds,
+        s.paused,
+        s.remaining_seconds,
+        s.overtime_work_seconds,
+    ) {
+        drop(s);
+        add_daily_work_seconds(seconds);
+        s = state.lock().unwrap();
     }
 
     s.running = false;
@@ -552,29 +613,21 @@ pub fn continue_timer(
         return Err("Timer is not in an extendable pause".into());
     }
 
-    let part_count = s.settings.sessions[s.active_session_index].parts.len();
-    let next_seconds: i64 = if s.current_part_index + 1 < part_count {
-        (s.settings.sessions[s.active_session_index].parts[s.current_part_index + 1].minutes * 60) as i64
-    } else {
-        0
-    };
-    let reset_seconds: i64 = (s.settings.sessions[s.active_session_index].parts[0].minutes * 60) as i64;
+    let part_seconds: Vec<i64> = s.settings.sessions[s.active_session_index]
+        .parts
+        .iter()
+        .map(|p| (p.minutes * 60) as i64)
+        .collect();
+    let first_seconds = part_seconds[0];
 
     let overtime = s.overtime_work_seconds;
     s.overtime_work_seconds = 0;
 
-    if s.current_part_index + 1 < part_count {
-        // Advance to next part.
-        s.current_part_index += 1;
-        s.remaining_seconds = next_seconds;
-        s.paused = false;
-    } else {
-        // Last part — stop and reset.
-        s.running = false;
-        s.paused = false;
-        s.current_part_index = 0;
-        s.remaining_seconds = reset_seconds;
-    }
+    let adv = continue_advance(s.current_part_index, &part_seconds, first_seconds);
+    s.current_part_index = adv.new_part_index;
+    s.remaining_seconds = adv.new_remaining_seconds;
+    s.running = adv.new_running;
+    s.paused = adv.new_paused;
 
     let daily = load_daily_total();
     let tick = build_tick(&s, daily);
@@ -1030,5 +1083,130 @@ mod tests {
             },
         ];
         assert!(validate_sessions(&sessions).is_ok());
+    }
+
+    // ---- stop_work_seconds ----
+
+    #[test]
+    fn stop_work_non_work_part() {
+        // "Break" parts should never record work seconds.
+        assert_eq!(stop_work_seconds("Break", 300, false, 200, 0), None);
+    }
+
+    #[test]
+    fn stop_work_mid_session() {
+        // 25-min work part, 500s elapsed (1000s remaining).
+        assert_eq!(stop_work_seconds("Work", 1500, false, 1000, 0), Some(500));
+    }
+
+    #[test]
+    fn stop_work_no_elapsed() {
+        // Just started, no time elapsed.
+        assert_eq!(stop_work_seconds("Work", 1500, false, 1500, 0), None);
+    }
+
+    #[test]
+    fn stop_work_fully_elapsed() {
+        // Timer hit zero exactly (non-extendable).
+        assert_eq!(stop_work_seconds("Work", 1500, false, 0, 0), Some(1500));
+    }
+
+    #[test]
+    fn stop_work_paused_with_overtime() {
+        // Paused in overtime, accumulated 30 overtime seconds.
+        assert_eq!(stop_work_seconds("Work", 1500, true, -30, 30), Some(30));
+    }
+
+    #[test]
+    fn stop_work_paused_no_overtime() {
+        // Paused exactly at zero, no overtime accumulated yet.
+        assert_eq!(stop_work_seconds("Work", 1500, true, 0, 0), None);
+    }
+
+    #[test]
+    fn stop_work_case_insensitive() {
+        // "WORK", "work", "Work" should all match.
+        assert_eq!(stop_work_seconds("WORK", 1500, false, 0, 0), Some(1500));
+        assert_eq!(stop_work_seconds("work", 1500, false, 0, 0), Some(1500));
+        assert_eq!(stop_work_seconds("wOrK", 1500, false, 0, 0), Some(1500));
+    }
+
+    #[test]
+    fn stop_work_remaining_negative_not_paused() {
+        // Edge case: negative remaining without paused flag (shouldn't
+        // happen in practice, but function handles it gracefully).
+        let result = stop_work_seconds("Work", 1500, false, -10, 0);
+        // full.saturating_sub(-10) = 1500 - (-10) = 1510, capped by max(0) → 1510
+        assert_eq!(result, Some(1510));
+    }
+
+    // ---- continue_advance ----
+
+    #[test]
+    fn continue_advance_mid_session() {
+        // Two-part session, currently on part 0 (index 0), advance to part 1.
+        let adv = continue_advance(0, &[1500, 300], 1500);
+        assert_eq!(adv.new_part_index, 1);
+        assert_eq!(adv.new_remaining_seconds, 300);
+        assert!(adv.new_running);
+        assert!(!adv.new_paused);
+    }
+
+    #[test]
+    fn continue_advance_last_part() {
+        // Two-part session, currently on part 1 (last), advance should stop/reset.
+        let adv = continue_advance(1, &[1500, 300], 1500);
+        assert_eq!(adv.new_part_index, 0);
+        assert_eq!(adv.new_remaining_seconds, 1500);
+        assert!(!adv.new_running);
+        assert!(!adv.new_paused);
+    }
+
+    #[test]
+    fn continue_advance_single_part() {
+        // Single-part session: only part is also the last part → stop and reset.
+        let adv = continue_advance(0, &[600], 600);
+        assert_eq!(adv.new_part_index, 0);
+        assert_eq!(adv.new_remaining_seconds, 600);
+        assert!(!adv.new_running);
+        assert!(!adv.new_paused);
+    }
+
+    // ---- days_since_epoch_to_date ----
+
+    #[test]
+    fn days_to_date_epoch() {
+        // Day 0 = 1970-01-01 (Unix epoch).
+        assert_eq!(days_since_epoch_to_date(0), "1970-01-01");
+    }
+
+    #[test]
+    fn days_to_date_known_dates() {
+        // 1970-01-02 = day 1
+        assert_eq!(days_since_epoch_to_date(1), "1970-01-02");
+        // 2000-01-01 = day 10957
+        assert_eq!(days_since_epoch_to_date(10957), "2000-01-01");
+        // 2024-01-01 = day 19723
+        assert_eq!(days_since_epoch_to_date(19723), "2024-01-01");
+    }
+
+    #[test]
+    fn days_to_date_leap_year() {
+        // 2024-02-29 (leap day) = day 19782
+        assert_eq!(days_since_epoch_to_date(19782), "2024-02-29");
+        // 2024-03-01 = day 19783
+        assert_eq!(days_since_epoch_to_date(19783), "2024-03-01");
+    }
+
+    #[test]
+    fn days_to_date_y2k_transition() {
+        // 1999-12-31 = day 10956
+        assert_eq!(days_since_epoch_to_date(10956), "1999-12-31");
+        // 2000-01-01 = day 10957
+        assert_eq!(days_since_epoch_to_date(10957), "2000-01-01");
+        // 2000-02-29 (leap year, century divisible by 400) = day 11016
+        assert_eq!(days_since_epoch_to_date(11016), "2000-02-29");
+        // 2000-03-01 = day 11017
+        assert_eq!(days_since_epoch_to_date(11017), "2000-03-01");
     }
 }

@@ -10,10 +10,22 @@ crate-type = ["rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+e2e-test = ["ureq"]
+
 [dependencies]
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+ureq = { version = "2", features = ["json"], optional = true }
+
+[[test]]
+name = "e2e"
+path = "tests/e2e/mod.rs"
+required-features = ["e2e-test"]
+
+[profile.dev]
+lto = "thin"          # eliminate unused dep DLL imports (Tauri/webview pull 30+)
 
 [profile.release]
 opt-level = "z"       # optimize for size

@@ -27,8 +27,27 @@ jobs:
           rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
           rustup default stable-x86_64-pc-windows-gnu
 
+      - name: Test (Rust)
+        run: |
+          $env:PATH = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin;$env:PATH"
+          cd src-tauri
+          cargo test --release
+
+      - name: Test (UI)
+        run: node ui/test/test.js
+
       - name: Build (release)
         run: |
           $env:PATH = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin;$env:PATH"
           cd src-tauri
           cargo build --release
+
+  # E2E tests require a display and WebDriver infrastructure (tauri-driver,
+  # msedgedriver). They work locally via ./test-e2e.sh but are not yet fully
+  # configured for GitHub Actions headless Windows runners.
+  #
+  # To run locally (one-time setup):
+  #   cargo install tauri-driver --locked
+  #   cargo install --git https://github.com/chippers/msedgedriver-tool --locked
+  #   msedgedriver-tool --install
+  #   ./test-e2e.sh

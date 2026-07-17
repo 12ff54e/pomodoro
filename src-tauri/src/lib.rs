@@ -7,7 +7,11 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let (settings, active_index) = timer::load_settings();
-            let remaining = (settings.sessions[active_index].parts[0].minutes * 60) as i64;
+            let test_mode = std::env::var("POMODORO_TEST_MODE")
+                .map(|v| v == "1")
+                .unwrap_or(false);
+            let remaining =
+                timer::minutes_to_seconds(settings.sessions[active_index].parts[0].minutes, test_mode);
             let state = timer::PomodoroState {
                 active_session_index: active_index,
                 current_part_index: 0,
@@ -17,6 +21,7 @@ pub fn run() {
                 paused: false,
                 overtime_work_seconds: 0,
                 is_docked: false,
+                test_mode,
             };
             app.manage(std::sync::Mutex::new(state));
             Ok(())

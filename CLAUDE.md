@@ -5,11 +5,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Run
 
 ```bash
-# MinGW toolchain must be on PATH (MSYS2 at C:\msys64\mingw64\bin)
+# Git Bash users: MSYS2 MinGW must come first — Git's bundled old MinGW
+# DLLs cause STATUS_ENTRYPOINT_NOT_FOUND if they shadow the MSYS2 ones.
 export PATH="/c/msys64/mingw64/bin:$PATH"
 
 # Build (debug)
 cd src-tauri && cargo build
+
+# Run tests
+cd src-tauri && cargo test
+
+# Run UI tests (requires Node.js 18+; no npm install needed)
+node ui/test/test.js
 
 # Build (release)
 cd src-tauri && cargo build --release

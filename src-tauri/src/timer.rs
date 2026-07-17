@@ -75,6 +75,9 @@ pub struct PomodoroState {
     pub overtime_work_seconds: u64,
     /// Whether the window is in dock mode (small, always-on-top, docked to top of screen).
     pub is_docked: bool,
+    /// When true, `part.minutes` is interpreted as seconds instead of minutes
+    /// so that E2E tests complete in seconds rather than minutes.
+    pub test_mode: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -257,6 +260,12 @@ fn days_since_epoch_to_date(days: i64) -> String {
     let y = if m <= 2 { y + 1 } else { y };
 
     format!("{:04}-{:02}-{:02}", y, m, d)
+}
+
+/// Convert configured minutes to seconds. When `test_mode` is true, treats
+/// minutes as seconds so E2E tests complete in seconds instead of minutes.
+pub fn minutes_to_seconds(minutes: u64, test_mode: bool) -> i64 {
+    if test_mode { minutes as i64 } else { (minutes * 60) as i64 }
 }
 
 /// Convert a parsed settings file into domain model + active index.
@@ -479,6 +488,7 @@ pub fn start_timer(
     // resumes without advancing).
     let sessions = s.settings.sessions.clone();
     let active_idx = s.active_session_index;
+    let test_mode = s.test_mode;
     s.running = true;
     s.paused = false;
     s.overtime_work_seconds = 0;
@@ -489,7 +499,7 @@ pub fn start_timer(
         let part_names: Vec<String> = sessions[active_idx]
             .parts.iter().map(|p| p.name.clone()).collect();
         let part_seconds: Vec<i64> = sessions[active_idx]
-            .parts.iter().map(|p| (p.minutes * 60) as i64).collect();
+            .parts.iter().map(|p| minutes_to_seconds(p.minutes, test_mode)).collect();
         let part_extendable: Vec<bool> = sessions[active_idx]
             .parts.iter().map(|p| p.extendable).collect();
 
@@ -589,7 +599,7 @@ pub fn stop_timer(
     // Record partial work time.
     let sessions = &s.settings.sessions;
     let part = &sessions[s.active_session_index].parts[s.current_part_index];
-    let full_seconds = (part.minutes * 60) as u64;
+    let full_seconds = minutes_to_seconds(part.minutes, s.test_mode) as u64;
     if let Some(seconds) = stop_work_seconds(
         &part.name,
         full_seconds,
@@ -606,7 +616,10 @@ pub fn stop_timer(
     s.paused = false;
     s.overtime_work_seconds = 0;
     s.current_part_index = 0;
-    s.remaining_seconds = (s.settings.sessions[s.active_session_index].parts[0].minutes * 60) as i64;
+    s.remaining_seconds = minutes_to_seconds(
+        s.settings.sessions[s.active_session_index].parts[0].minutes,
+        s.test_mode,
+    );
 
     let daily = load_daily_total();
     let tick = build_tick(&s, daily);
@@ -629,7 +642,7 @@ pub fn continue_timer(
     let part_seconds: Vec<i64> = s.settings.sessions[s.active_session_index]
         .parts
         .iter()
-        .map(|p| (p.minutes * 60) as i64)
+        .map(|p| minutes_to_seconds(p.minutes, s.test_mode))
         .collect();
     let first_seconds = part_seconds[0];
 
@@ -682,8 +695,10 @@ pub fn update_settings(
         s.paused = false;
         s.overtime_work_seconds = 0;
         s.current_part_index = 0;
-        s.remaining_seconds =
-            (s.settings.sessions[s.active_session_index].parts[0].minutes * 60) as i64;
+        s.remaining_seconds = minutes_to_seconds(
+            s.settings.sessions[s.active_session_index].parts[0].minutes,
+            s.test_mode,
+        );
     }
 
     let daily = load_daily_total();
@@ -720,7 +735,7 @@ pub fn switch_session(
     s.current_part_index = 0;
     s.paused = false;
     s.overtime_work_seconds = 0;
-    s.remaining_seconds = (s.settings.sessions[index].parts[0].minutes * 60) as i64;
+    s.remaining_seconds = minutes_to_seconds(s.settings.sessions[index].parts[0].minutes, s.test_mode);
 
     save_settings(&s.settings.sessions, s.active_session_index);
 
@@ -833,6 +848,24 @@ mod tests {
         assert!(!session.parts[1].extendable);
     }
 
+    // ---- minutes_to_seconds ----
+
+    #[test]
+    fn minutes_to_seconds_normal_mode() {
+        assert_eq!(minutes_to_seconds(25, false), 1500);
+        assert_eq!(minutes_to_seconds(5, false), 300);
+        assert_eq!(minutes_to_seconds(1, false), 60);
+        assert_eq!(minutes_to_seconds(120, false), 7200);
+    }
+
+    #[test]
+    fn minutes_to_seconds_test_mode() {
+        assert_eq!(minutes_to_seconds(25, true), 25);
+        assert_eq!(minutes_to_seconds(5, true), 5);
+        assert_eq!(minutes_to_seconds(1, true), 1);
+        assert_eq!(minutes_to_seconds(120, true), 120);
+    }
+
     // ---- today_string ----
 
     #[test]
@@ -940,6 +973,7 @@ mod tests {
             paused: false,
             overtime_work_seconds: 0,
             is_docked: false,
+            test_mode: false,
         };
         let tick = build_tick(&state, 3600);
         assert_eq!(tick.remaining_seconds, 1500);
@@ -971,6 +1005,7 @@ mod tests {
             paused: true,
             overtime_work_seconds: 5,
             is_docked: false,
+            test_mode: false,
         };
         let tick = build_tick(&state, 0);
         assert_eq!(tick.remaining_seconds, -5);

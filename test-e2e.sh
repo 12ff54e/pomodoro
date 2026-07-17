@@ -4,7 +4,7 @@
 #
 # Prerequisites (one-time):
 #   cargo install tauri-driver --locked
-#   cargo install msedgedriver-tool --locked && msedgedriver-tool --install
+#   cargo install --git https://github.com/chippers/msedgedriver-tool --locked && msedgedriver-tool --install
 #
 # Usage:
 #   ./test-e2e.sh

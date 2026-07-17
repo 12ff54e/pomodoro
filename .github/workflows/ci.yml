@@ -74,7 +74,7 @@ jobs:
 
       - name: Install msedgedriver
         run: |
-          cargo install msedgedriver-tool --locked
+          cargo install --git https://github.com/chippers/msedgedriver-tool --locked
           msedgedriver-tool --install
 
       - name: Build app (test mode)

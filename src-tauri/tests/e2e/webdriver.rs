@@ -25,6 +25,9 @@ impl WebDriverClient {
                     "browserName": "tauri",
                     "tauri:options": {
                         "application": app_path
+                    },
+                    "ms:edgeOptions": {
+                        "args": ["--headless=new"]
                     }
                 }
             }

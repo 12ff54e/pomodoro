@@ -15,7 +15,7 @@ set -euo pipefail
 export PATH="/c/msys64/mingw64/bin:$PATH"
 
 # ---- Configuration ----
-TAURI_DRIVER_PORT="${TAURI_DRIVER_PORT:-4445}"
+TAURI_DRIVER_PORT="${TAURI_DRIVER_PORT:-14445}"
 export TAURI_DRIVER_URL="http://127.0.0.1:${TAURI_DRIVER_PORT}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

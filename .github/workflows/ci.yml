@@ -93,9 +93,9 @@ jobs:
           export POMODORO_TEST_MODE=1
           cd src-tauri
           export APP_PATH="$(pwd)/target/debug/pomodoro.exe"
-          export TAURI_DRIVER_URL="http://127.0.0.1:4445"
+          export TAURI_DRIVER_URL="http://127.0.0.1:14445"
 
-          tauri-driver --port 4445 &
+          tauri-driver --port 14445 &
           DRIVER_PID=$!
 
           # Wait for tauri-driver.

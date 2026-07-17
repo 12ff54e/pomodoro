@@ -17,6 +17,8 @@ export PATH="/c/msys64/mingw64/bin:$PATH"
 # ---- Configuration ----
 TAURI_DRIVER_PORT="${TAURI_DRIVER_PORT:-14445}"
 export TAURI_DRIVER_URL="http://127.0.0.1:${TAURI_DRIVER_PORT}"
+# Enable headless WebView2 for CI environments (no display).
+export WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="${WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:---headless=new}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/src-tauri"

@@ -27,7 +27,12 @@ impl WebDriverClient {
                         "application": app_path
                     },
                     "ms:edgeOptions": {
-                        "args": ["--headless=new"]
+                        "args": [
+                            "--headless=new",
+                            "--no-sandbox",
+                            "--disable-gpu",
+                            "--disable-dev-shm-usage"
+                        ]
                     }
                 }
             }

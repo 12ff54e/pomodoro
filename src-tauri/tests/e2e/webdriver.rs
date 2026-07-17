@@ -30,14 +30,34 @@ impl WebDriverClient {
             }
         });
 
-        let resp: Value = ureq::post(&create_url)
+        let resp: Value = match ureq::post(&create_url)
             .set("Content-Type", "application/json")
             .send_json(&body)
-            .map_err(|e| format!("POST /session failed: {}", e))?
-            .into_json()
-            .map_err(|e| format!("POST /session parse error: {}", e))?;
+        {
+            Ok(r) => r.into_json().map_err(|e| format!("POST /session parse error: {}", e))?,
+            Err(ureq::Error::Status(code, r)) => {
+                let body = r.into_string().unwrap_or_default();
+                return Err(format!(
+                    "POST /session returned HTTP {}: {}",
+                    code,
+                    &body[..body.len().min(500)]
+                ));
+            }
+            Err(e) => return Err(format!("POST /session transport error: {}", e)),
+        };
 
-        let session_id = resp["value"]["sessionId"]
+        let value = &resp["value"];
+
+        // Check for WebDriver error in the response.
+        if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
+            let msg = value
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(no message)");
+            return Err(format!("WebDriver error: {} — {}", err, msg));
+        }
+
+        let session_id = value["sessionId"]
             .as_str()
             .ok_or_else(|| {
                 format!(

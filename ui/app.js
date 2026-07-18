@@ -84,7 +84,10 @@ function phaseClass(partName) {
 function render(tick) {
   // Beep on timer-driven transitions only (not manual switches or startup).
   const partChanged = tick.partName !== lastPartName;
-  if (partChanged && tick.running && !tick.paused && !isPaused) {
+  if (tick.running && !wasRunning) {
+    // Session started (user clicked Start) — single long beep.
+    beep(660, 600, 1);
+  } else if (partChanged && tick.running && !tick.paused && !isPaused) {
     // Timer auto-advanced to the next part — short triple beep.
     beep(880, 150, 3);
   } else if (partChanged && !tick.running && wasRunning) {

@@ -46,6 +46,7 @@ End-to-end tests that drive a real Tauri app process via WebDriver (`tauri-drive
 (25 s work, 5 s break), making time-based tests fast.
 
 **Prerequisites (one-time):**
+
 ```bash
 cargo install tauri-driver --locked
 cargo install --git https://github.com/chippers/msedgedriver-tool --locked
@@ -53,6 +54,7 @@ msedgedriver-tool --install
 ```
 
 **Run:**
+
 ```bash
 ./test-e2e.sh
 ```
@@ -77,17 +79,18 @@ Pomodoro desktop clock built with Rust + Tauri v2. Vanilla HTML/CSS/JS frontend 
 
 ### Backend (`src-tauri/src/`)
 
-| File | Role |
-|---|---|
-| `main.rs` | Desktop entry point, hides console window in release |
-| `lib.rs` | App builder: registers `tauri-plugin-store`, loads persisted settings in `setup`, manages `Mutex<PomodoroState>`, registers commands |
-| `timer.rs` | State structs, Tauri commands, background timer thread |
+| File       | Role                                                                                                                                 |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `main.rs`  | Desktop entry point, hides console window in release                                                                                 |
+| `lib.rs`   | App builder: registers `tauri-plugin-store`, loads persisted settings in `setup`, manages `Mutex<PomodoroState>`, registers commands |
+| `timer.rs` | State structs, Tauri commands, background timer thread                                                                               |
 
 **State model** (`PomodoroState`): `active_session_id` (UUID string), `current_part_index`, `remaining_seconds` (i64 — negative during overtime), `settings` (PomodoroSettings), `running` flag, `paused` flag (overtime waiting for user), `overtime_tracked_seconds`, `is_docked` flag (window is in compact always-on-top mode). Wrapped in `Mutex<PomodoroState>` managed by Tauri.
 
 **Data model:** Each `Session` has a stable `id` (UUID v4), a `name`, and a list of `SessionPart`s. Each part has an optional `name` (falls back to "Part N"), `minutes` (1–120), `extendable` (bool — when true, the timer enters paused overtime at 0 instead of auto-advancing), and `track_time` (bool — when true, seconds spent on this part are recorded to the daily log). Sessions are identified by UUID everywhere (not array index). Settings are persisted as JSON next to the executable (`pomodoro.json`). Detailed time records are tracked in `pomodoro_record.json` (date → session UUID → part index → accumulated seconds).
 
 **Commands:**
+
 - `get_state` — returns `TimerTick` snapshot (includes `active_session_id`, `part_index`)
 - `get_daily_total` — returns today's total tracked seconds (sum across all sessions/parts in record)
 - `get_settings` — returns current `PomodoroSettings`
@@ -120,6 +123,7 @@ Session switch → invoke('switch_session', { sessionId }) → Rust resolves UUI
 ```
 
 **Extendable parts (overtime):**
+
 ```
 Extendable part hits 0 → paused=true, timer keeps ticking into negative
   → frontend shows negative time (red), Continue button appears, triple-beep alert

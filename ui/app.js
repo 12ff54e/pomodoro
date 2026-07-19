@@ -305,6 +305,9 @@ function buildSettingsForm(editSessions) {
       const row = document.createElement('div');
       row.className = 'part-row';
 
+      const nameCol = document.createElement('div');
+      nameCol.className = 'part-name-col';
+
       const partName = document.createElement('input');
       partName.type = 'text';
       partName.value = part.name;
@@ -313,15 +316,8 @@ function buildSettingsForm(editSessions) {
         editSessions[si].parts[pi].name = partName.value;
       });
 
-      const partMin = document.createElement('input');
-      partMin.type = 'number';
-      partMin.min = 1;
-      partMin.max = 120;
-      partMin.value = part.minutes;
-      partMin.addEventListener('input', () => {
-        const v = parseInt(partMin.value, 10);
-        if (!isNaN(v)) editSessions[si].parts[pi].minutes = v;
-      });
+      const checkboxRow = document.createElement('div');
+      checkboxRow.className = 'checkbox-row';
 
       const extLabel = document.createElement('label');
       extLabel.className = 'extendable-label';
@@ -347,6 +343,22 @@ function buildSettingsForm(editSessions) {
       trackLabel.appendChild(trackCheck);
       trackLabel.appendChild(document.createTextNode(' Track'));
 
+      checkboxRow.appendChild(extLabel);
+      checkboxRow.appendChild(trackLabel);
+
+      nameCol.appendChild(partName);
+      nameCol.appendChild(checkboxRow);
+
+      const partMin = document.createElement('input');
+      partMin.type = 'number';
+      partMin.min = 1;
+      partMin.max = 120;
+      partMin.value = part.minutes;
+      partMin.addEventListener('input', () => {
+        const v = parseInt(partMin.value, 10);
+        if (!isNaN(v)) editSessions[si].parts[pi].minutes = v;
+      });
+
       const rmBtn = document.createElement('button');
       rmBtn.className = 'btn-delete-part';
       rmBtn.textContent = '×';
@@ -357,10 +369,8 @@ function buildSettingsForm(editSessions) {
         buildSettingsForm(editSessions);
       });
 
-      row.appendChild(partName);
+      row.appendChild(nameCol);
       row.appendChild(partMin);
-      row.appendChild(extLabel);
-      row.appendChild(trackLabel);
       row.appendChild(rmBtn);
       partsList.appendChild(row);
     });

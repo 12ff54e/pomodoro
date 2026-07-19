@@ -622,8 +622,10 @@ describe('buildSettingsForm', () => {
     const partsList = card._children[1]; // second child of card
     // Second row in partsList (Break part, extendable=true)
     const breakRow = partsList._children[1];
-    // Third child of row is the extendable label, containing the checkbox.
-    const extLabel = breakRow._children[2];
+    // nameCol (child[0]) → checkboxRow (child[1]) → extLabel (child[0])
+    const nameCol = breakRow._children[0];
+    const checkboxRow = nameCol._children[1];
+    const extLabel = checkboxRow._children[0];
     const extCheck = extLabel._children[0]; // <input type="checkbox">
     assert.equal(extCheck.tag, 'input');
     assert.equal(extCheck.checked, true);

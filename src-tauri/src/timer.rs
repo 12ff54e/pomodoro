@@ -492,7 +492,13 @@ pub fn start_timer(
     s.running = true;
     s.paused = false;
     s.overtime_work_seconds = 0;
+
+    // Emit an initial tick immediately so the frontend reflects the new
+    // state without waiting for the first 1 s sleep in the timer thread.
+    let daily = load_daily_total();
+    let tick = build_tick(&s, daily);
     drop(s);
+    let _ = app.emit("timer-tick", &tick);
 
     std::thread::spawn(move || {
         // Snapshot part metadata from the session at start time.

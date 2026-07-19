@@ -12,12 +12,6 @@ export PATH="/c/msys64/mingw64/bin:$PATH"
 # Build (debug)
 cd src-tauri && cargo build
 
-# Run tests
-cd src-tauri && cargo test
-
-# Run UI tests (requires Node.js 18+; no npm install needed)
-node ui/test/test.js
-
 # Build (release)
 cd src-tauri && cargo build --release
 
@@ -27,6 +21,53 @@ cd src-tauri && cargo build --release
 # Dev mode (with hot-reload, requires tauri-cli)
 cargo tauri dev
 ```
+
+## Testing
+
+Two test suites — run both before tagging a release:
+
+```bash
+# 1. Rust unit tests (44 tests — state logic, date math, serialization, validation)
+cd src-tauri && cargo test
+
+# 2. UI tests (49 tests — runs app.js in a Node.js vm sandbox with mocked
+#    DOM, Tauri API, and AudioContext; no npm install needed, Node 18+)
+node ui/test/test.js
+```
+
+**What the UI tests cover:** `formatTime` / `formatDailyTotal` / `phaseClass` (pure functions), `render` (DOM updates for running/paused/overtime/docked states), `buildSettingsForm` (form generation and two-way data binding), client-side settings validation, session-switcher wrap-around logic, keyboard-shortcut guards, and event-listener registration for `timer-tick` and `dock-mode-changed`.
+
+**What they don't cover:** No actual Tauri IPC — `invoke()` calls are stubbed. No browser rendering or CSS layout. Timer-thread behavior, file I/O, and window management are tested only by the Rust unit tests.
+
+### E2E tests (local only — not in CI)
+
+End-to-end tests that drive a real Tauri app process via WebDriver (`tauri-driver` +
+`msedgedriver`). The app is built with `POMODORO_TEST_MODE=1` so minutes become seconds
+(25 s work, 5 s break), making time-based tests fast.
+
+**Prerequisites (one-time):**
+```bash
+cargo install tauri-driver --locked
+cargo install --git https://github.com/chippers/msedgedriver-tool --locked
+msedgedriver-tool --install
+```
+
+**Run:**
+```bash
+./test-e2e.sh
+```
+
+**What they cover (7 tests):** start/stop/tick-down, non-extendable part auto-advance,
+extendable-part overtime + Continue button, stop-records-work-time, settings panel
+open/edit/save, session switcher, dock mode toggle.
+
+**Architecture:** `src-tauri/tests/e2e/` — a minimal WebDriver client (`webdriver.rs`)
+using only `ureq` + `serde_json` (no async, no tokio, no npm). Each test spawns a fresh
+app instance via `WebDriverClient::new_session()` and cleans up with `delete_session()`.
+
+**Why not in CI:** Removed from CI in commit `1cb5be6` because GitHub Actions Windows
+runners have issues with `msedgedriver` + WebView2 in headless mode. Run locally before
+releases.
 
 ## Architecture
 

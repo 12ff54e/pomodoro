@@ -1,9 +1,11 @@
 // ---- State (mirrored from Rust, updated by events) ----
 let sessions = [];
-let activeSessionIndex = 0;
+let activeSessionId = '';
 let currentPartName = 'Work';
+let currentPartIndex = 0;
 let currentSessionName = 'Pomodoro';
 let sessionCount = 1;
+let sessionIds = [];
 let isRunning = false;
 let isPaused = false;
 let wasRunning = false;
@@ -72,13 +74,10 @@ function formatDailyTotal(totalSeconds) {
   return minutes + 'm';
 }
 
-/** Map a part name to a CSS class for the phase badge. */
-function phaseClass(partName) {
-  const key = partName.toLowerCase();
-  if (key === 'work') return 'phase-work';
-  if (key === 'break') return 'phase-break';
-  if (key === 'play') return 'phase-play';
-  return 'phase-default';
+/** Map a part index to a CSS class for the phase badge. */
+const PART_COLORS = 5;
+function phaseClass(partIndex) {
+  return 'phase-part-' + (partIndex % PART_COLORS);
 }
 
 function render(tick) {
@@ -103,8 +102,9 @@ function render(tick) {
   wasRunning = tick.running;
 
   currentPartName = tick.partName;
+  currentPartIndex = tick.partIndex;
   currentSessionName = tick.sessionName;
-  activeSessionIndex = tick.activeSessionIndex;
+  activeSessionId = tick.activeSessionId;
   sessionCount = tick.sessionCount;
   isRunning = tick.running;
   isPaused = tick.paused;
@@ -119,7 +119,7 @@ function render(tick) {
   }
 
   phaseEl.textContent = tick.partName.toUpperCase();
-  phaseEl.className = phaseClass(tick.partName);
+  phaseEl.className = phaseClass(tick.partIndex);
   sessionLabelEl.textContent = tick.sessionName;
 
   // Show/hide Continue button based on paused state.
@@ -203,9 +203,11 @@ continueBtn.addEventListener('click', async () => {
 // ---- Session switcher arrows ----
 sessionLeftBtn.addEventListener('click', async () => {
   if (isRunning || sessionCount <= 1) return;
-  const prev = (activeSessionIndex - 1 + sessionCount) % sessionCount;
+  const cur = sessionIds.indexOf(activeSessionId);
+  if (cur < 0) return;
+  const id = sessionIds[(cur - 1 + sessionIds.length) % sessionIds.length];
   try {
-    await invoke('switch_session', { index: prev });
+    await invoke('switch_session', { sessionId: id });
   } catch (e) {
     console.error('switch_session failed:', e);
   }
@@ -213,9 +215,11 @@ sessionLeftBtn.addEventListener('click', async () => {
 
 sessionRightBtn.addEventListener('click', async () => {
   if (isRunning || sessionCount <= 1) return;
-  const next = (activeSessionIndex + 1) % sessionCount;
+  const cur = sessionIds.indexOf(activeSessionId);
+  if (cur < 0) return;
+  const id = sessionIds[(cur + 1) % sessionIds.length];
   try {
-    await invoke('switch_session', { index: next });
+    await invoke('switch_session', { sessionId: id });
   } catch (e) {
     console.error('switch_session failed:', e);
   }
@@ -234,12 +238,15 @@ document.addEventListener('keydown', async (e) => {
 
   if (isRunning || sessionCount <= 1) return;
 
+  const cur = sessionIds.indexOf(activeSessionId);
+  if (cur < 0) return;
+
   if (e.key === 'ArrowLeft' || e.key === 'h') {
-    const prev = (activeSessionIndex - 1 + sessionCount) % sessionCount;
-    try { await invoke('switch_session', { index: prev }); } catch (_) {}
+    const id = sessionIds[(cur - 1 + sessionIds.length) % sessionIds.length];
+    try { await invoke('switch_session', { sessionId: id }); } catch (_) {}
   } else if (e.key === 'ArrowRight' || e.key === 'l') {
-    const next = (activeSessionIndex + 1) % sessionCount;
-    try { await invoke('switch_session', { index: next }); } catch (_) {}
+    const id = sessionIds[(cur + 1) % sessionIds.length];
+    try { await invoke('switch_session', { sessionId: id }); } catch (_) {}
   }
 });
 
@@ -248,10 +255,11 @@ document.addEventListener('keydown', async (e) => {
 /** Create a new default session (Work → Break). */
 function makeDefaultSession() {
   return {
+    id: '',   // Server assigns UUID on save
     name: 'Work / Break',
     parts: [
-      { name: 'Work', minutes: 25, extendable: false },
-      { name: 'Break', minutes: 5, extendable: false },
+      { name: 'Work', minutes: 25, extendable: false, track_time: true },
+      { name: 'Break', minutes: 5, extendable: false, track_time: false },
     ],
   };
 }
@@ -327,6 +335,18 @@ function buildSettingsForm(editSessions) {
       extLabel.appendChild(extCheck);
       extLabel.appendChild(document.createTextNode(' Ext'));
 
+      const trackLabel = document.createElement('label');
+      trackLabel.className = 'extendable-label';
+      const trackCheck = document.createElement('input');
+      trackCheck.type = 'checkbox';
+      trackCheck.checked = part.track_time || false;
+      trackCheck.title = 'Track time: record seconds spent on this part to the daily log';
+      trackCheck.addEventListener('change', () => {
+        editSessions[si].parts[pi].track_time = trackCheck.checked;
+      });
+      trackLabel.appendChild(trackCheck);
+      trackLabel.appendChild(document.createTextNode(' Track'));
+
       const rmBtn = document.createElement('button');
       rmBtn.className = 'btn-delete-part';
       rmBtn.textContent = '×';
@@ -340,6 +360,7 @@ function buildSettingsForm(editSessions) {
       row.appendChild(partName);
       row.appendChild(partMin);
       row.appendChild(extLabel);
+      row.appendChild(trackLabel);
       row.appendChild(rmBtn);
       partsList.appendChild(row);
     });
@@ -349,7 +370,7 @@ function buildSettingsForm(editSessions) {
     addPart.className = 'btn-add-part';
     addPart.textContent = '+ Add Part';
     addPart.addEventListener('click', () => {
-      editSessions[si].parts.push({ name: 'Rest', minutes: 5, extendable: false });
+      editSessions[si].parts.push({ name: 'Rest', minutes: 5, extendable: false, track_time: false });
       buildSettingsForm(editSessions);
     });
 
@@ -364,8 +385,13 @@ function buildSettingsForm(editSessions) {
 settingsBtn.addEventListener('click', () => {
   // Deep-clone sessions for editing.
   const editSessions = sessions.map(s => ({
+    id: s.id,
     name: s.name,
-    parts: s.parts.map(p => ({ name: p.name, minutes: p.minutes, extendable: p.extendable || false })),
+    parts: s.parts.map(p => ({
+      name: p.name, minutes: p.minutes,
+      extendable: p.extendable || false,
+      track_time: p.track_time || false,
+    })),
   }));
   buildSettingsForm(editSessions);
 
@@ -397,10 +423,6 @@ saveBtn.addEventListener('click', async () => {
       return;
     }
     for (const p of s.parts) {
-      if (!p.name.trim()) {
-        alert('Each part must have a name.');
-        return;
-      }
       if (!p.minutes || p.minutes < 1 || p.minutes > 120) {
         alert('Part minutes must be between 1 and 120.');
         return;
@@ -411,6 +433,7 @@ saveBtn.addEventListener('click', async () => {
   try {
     const newSettings = await invoke('update_settings', { sessions: edit });
     sessions = newSettings.sessions;
+    sessionIds = newSettings.sessions.map(s => s.id);
     overlay.classList.add('hidden');
   } catch (e) {
     console.error('update_settings failed:', e);
@@ -435,6 +458,7 @@ overlay.addEventListener('click', (e) => {
       invoke('get_dock_state'),
     ]);
     sessions = settings.sessions;
+    sessionIds = settings.sessions.map(s => s.id);
     render(tick);
     dailyTotalEl.textContent = 'Today: ' + formatDailyTotal(daily);
     setDocked(docked);

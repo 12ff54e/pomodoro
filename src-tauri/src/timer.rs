@@ -15,10 +15,16 @@ pub struct SessionPart {
     pub minutes: u64,
     #[serde(default)]
     pub extendable: bool,
+    /// When true, time spent on this part is recorded to the daily log.
+    #[serde(default)]
+    pub track_time: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
+    /// Stable UUID, generated on creation. Empty string only during
+    /// migration / frontend handoff — the backend assigns a real UUID.
+    pub id: String,
     pub name: String,
     pub parts: Vec<SessionPart>,
 }
@@ -32,17 +38,20 @@ impl Default for PomodoroSettings {
     fn default() -> Self {
         Self {
             sessions: vec![Session {
+                id: uuid::Uuid::new_v4().to_string(),
                 name: "Pomodoro".into(),
                 parts: vec![
                     SessionPart {
                         name: "Work".into(),
                         minutes: 25,
                         extendable: false,
+                        track_time: true,
                     },
                     SessionPart {
                         name: "Break".into(),
                         minutes: 5,
                         extendable: false,
+                        track_time: false,
                     },
                 ],
             }],
@@ -56,23 +65,27 @@ pub struct TimerTick {
     pub remaining_seconds: i64,
     pub session_name: String,
     pub part_name: String,
+    pub part_index: usize,
     pub running: bool,
     pub paused: bool,
     pub daily_total_seconds: u64,
-    pub active_session_index: usize,
+    pub active_session_id: String,
     pub session_count: usize,
 }
 
 #[derive(Debug)]
 pub struct PomodoroState {
-    pub active_session_index: usize,
+    /// UUID of the currently active session.
+    pub active_session_id: String,
     pub current_part_index: usize,
     pub remaining_seconds: i64,
     pub settings: PomodoroSettings,
     pub running: bool,
     pub paused: bool,
-    /// Accumulated overtime seconds for the current Work part (flushed on Continue/Stop).
-    pub overtime_work_seconds: u64,
+    /// Accumulated tracked overtime seconds for the current part
+    /// (flushed on Continue/Stop). Only increments when the part has
+    /// `track_time` enabled.
+    pub overtime_tracked_seconds: u64,
     /// Whether the window is in dock mode (small, always-on-top, docked to top of screen).
     pub is_docked: bool,
     /// When true, `part.minutes` is interpreted as seconds instead of minutes
@@ -96,9 +109,9 @@ fn settings_path() -> PathBuf {
     exe_dir().join("pomodoro.json")
 }
 
-/// `<exe-dir>/pomodoro_daily.json` — grows over time, loaded separately.
-fn daily_path() -> PathBuf {
-    exe_dir().join("pomodoro_daily.json")
+/// `<exe-dir>/pomodoro_record.json` — detailed per-session/per-part log.
+fn record_path() -> PathBuf {
+    exe_dir().join("pomodoro_record.json")
 }
 
 // ---- Settings file ----
@@ -109,7 +122,7 @@ struct SettingsFile {
     sessions: Option<Vec<SessionDef>>,
     #[serde(default)]
     #[serde(rename = "activeSession")]
-    active_session: Option<usize>,
+    active_session: Option<serde_json::Value>,
 
     // Legacy fields for migration — only present in old-format files.
     #[serde(default)]
@@ -131,6 +144,8 @@ struct SettingsFile {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct SessionDef {
+    #[serde(default)]
+    id: String,
     name: String,
     parts: Vec<PartDef>,
 }
@@ -141,43 +156,51 @@ struct PartDef {
     minutes: u64,
     #[serde(default)]
     extendable: bool,
+    #[serde(default)]
+    track_time: bool,
 }
 
 /// Build default sessions from legacy hardcoded sessions (migration path).
-fn legacy_sessions(file: &SettingsFile) -> Vec<Session> {
-    let wm = file.work_minutes.unwrap_or(25);
-    let bm = file.break_minutes.unwrap_or(5);
-    let pm = file.play_minutes.unwrap_or(25);
-    let pbm = file.play_break_minutes.unwrap_or(5);
+fn legacy_sessions(_file: &SettingsFile) -> Vec<Session> {
+    let wm = _file.work_minutes.unwrap_or(25);
+    let bm = _file.break_minutes.unwrap_or(5);
+    let pm = _file.play_minutes.unwrap_or(25);
+    let pbm = _file.play_break_minutes.unwrap_or(5);
 
     vec![
         Session {
+            id: uuid::Uuid::new_v4().to_string(),
             name: "Pomodoro".into(),
             parts: vec![
                 SessionPart {
                     name: "Work".into(),
                     minutes: wm,
                     extendable: false,
+                    track_time: true,
                 },
                 SessionPart {
                     name: "Break".into(),
                     minutes: bm,
                     extendable: false,
+                    track_time: false,
                 },
             ],
         },
         Session {
+            id: uuid::Uuid::new_v4().to_string(),
             name: "Play / Break".into(),
             parts: vec![
                 SessionPart {
                     name: "Play".into(),
                     minutes: pm,
                     extendable: false,
+                    track_time: true,
                 },
                 SessionPart {
                     name: "Break".into(),
                     minutes: pbm,
                     extendable: false,
+                    track_time: false,
                 },
             ],
         },
@@ -185,16 +208,56 @@ fn legacy_sessions(file: &SettingsFile) -> Vec<Session> {
 }
 
 fn load_settings_file() -> SettingsFile {
-    match std::fs::read_to_string(settings_path()) {
-        Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-        Err(_) => SettingsFile::default(),
+    let raw = match std::fs::read_to_string(settings_path()) {
+        Ok(s) => s,
+        Err(_) => return SettingsFile::default(),
+    };
+    let root: serde_json::Value =
+        serde_json::from_str(&raw).unwrap_or_default();
+    let mut file: SettingsFile =
+        serde_json::from_value(root.clone()).unwrap_or_default();
+
+    // Migration 1: If activeSession is a number (old format), resolve to
+    // the corresponding session UUID string.
+    if let Some(active) = root.get("activeSession") {
+        if active.is_number() {
+            if let Some(sessions) = &file.sessions {
+                if let Some(idx) = active.as_u64().map(|i| i as usize) {
+                    if idx < sessions.len() {
+                        let uuid = if sessions[idx].id.is_empty() {
+                            uuid::Uuid::new_v4().to_string()
+                        } else {
+                            sessions[idx].id.clone()
+                        };
+                        file.active_session =
+                            Some(serde_json::Value::String(uuid));
+                    }
+                }
+            }
+        }
+    } else if root.get("activeSessionId").is_some() {
+        // Already new format — handled via serde_json::Value.
+        file.active_session =
+            root.get("activeSessionId").cloned();
     }
+
+    // Migration 2: Generate UUIDs for sessions that don't have one.
+    if let Some(ref mut sessions) = file.sessions {
+        for s in sessions.iter_mut() {
+            if s.id.is_empty() {
+                s.id = uuid::Uuid::new_v4().to_string();
+            }
+        }
+    }
+
+    file
 }
 
-fn save_settings(sessions: &[Session], active_index: usize) {
+fn save_settings(sessions: &[Session], active_id: &str) {
     let defs: Vec<SessionDef> = sessions
         .iter()
         .map(|s| SessionDef {
+            id: s.id.clone(),
             name: s.name.clone(),
             parts: s
                 .parts
@@ -203,31 +266,35 @@ fn save_settings(sessions: &[Session], active_index: usize) {
                     name: p.name.clone(),
                     minutes: p.minutes,
                     extendable: p.extendable,
+                    track_time: p.track_time,
                 })
                 .collect(),
         })
         .collect();
     let file = serde_json::json!({
         "sessions": defs,
-        "activeSession": active_index,
+        "activeSessionId": active_id,
     });
     if let Ok(json) = serde_json::to_string_pretty(&file) {
         let _ = std::fs::write(settings_path(), json);
     }
 }
 
-// ---- Daily totals file ----
+// ---- Record file (per-session, per-part time tracking) ----
 
-fn load_daily_totals() -> BTreeMap<String, u64> {
-    match std::fs::read_to_string(daily_path()) {
+/// date → session_uuid → part_index_string → accumulated seconds
+type PomodoroRecord = BTreeMap<String, BTreeMap<String, BTreeMap<String, u64>>>;
+
+fn load_record() -> PomodoroRecord {
+    match std::fs::read_to_string(record_path()) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
         Err(_) => BTreeMap::new(),
     }
 }
 
-fn save_daily_totals(totals: &BTreeMap<String, u64>) {
-    if let Ok(json) = serde_json::to_string_pretty(totals) {
-        let _ = std::fs::write(daily_path(), json);
+fn save_record(record: &PomodoroRecord) {
+    if let Ok(json) = serde_json::to_string_pretty(record) {
+        let _ = std::fs::write(record_path(), json);
     }
 }
 
@@ -268,14 +335,20 @@ pub fn minutes_to_seconds(minutes: u64, test_mode: bool) -> i64 {
     if test_mode { minutes as i64 } else { (minutes * 60) as i64 }
 }
 
-/// Convert a parsed settings file into domain model + active index.
+/// Find a session's array index by its UUID. Returns `None` if not found.
+fn find_session_index(sessions: &[Session], id: &str) -> Option<usize> {
+    sessions.iter().position(|s| s.id == id)
+}
+
+/// Convert a parsed settings file into domain model + active session UUID.
 /// Extracted for testability — test the three-branch logic without touching disk.
-fn settings_from_file(file: SettingsFile) -> (PomodoroSettings, usize) {
+fn settings_from_file(file: SettingsFile) -> (PomodoroSettings, String) {
     if let Some(sessions) = file.sessions {
         // New format — convert SessionDef → Session.
         let sessions: Vec<Session> = sessions
             .into_iter()
             .map(|s| Session {
+                id: s.id,
                 name: s.name,
                 parts: s
                     .parts
@@ -284,73 +357,120 @@ fn settings_from_file(file: SettingsFile) -> (PomodoroSettings, usize) {
                         name: p.name,
                         minutes: p.minutes,
                         extendable: p.extendable,
+                        track_time: p.track_time,
                     })
                     .collect(),
             })
             .collect();
-        let active = file
-            .active_session
-            .unwrap_or(0)
-            .min(sessions.len().saturating_sub(1));
-        (PomodoroSettings { sessions }, active)
+
+        // Resolve active_session Value to a UUID string.
+        let active_id = match &file.active_session {
+            Some(serde_json::Value::String(id)) => {
+                if sessions.iter().any(|s| s.id == *id) {
+                    id.clone()
+                } else {
+                    sessions.first().map(|s| s.id.clone()).unwrap_or_default()
+                }
+            }
+            Some(serde_json::Value::Number(n)) => {
+                // Old format number — resolve to index if possible.
+                if let Some(idx) = n.as_u64().map(|i| i as usize) {
+                    sessions
+                        .get(idx)
+                        .map(|s| s.id.clone())
+                        .unwrap_or_else(|| {
+                            sessions.first().map(|s| s.id.clone()).unwrap_or_default()
+                        })
+                } else {
+                    sessions.first().map(|s| s.id.clone()).unwrap_or_default()
+                }
+            }
+            _ => sessions.first().map(|s| s.id.clone()).unwrap_or_default(),
+        };
+
+        (PomodoroSettings { sessions }, active_id)
     } else if file.work_minutes.is_some() || file.play_minutes.is_some() {
         // Old format — migrate from legacy fields.
         let sessions = legacy_sessions(&file);
-        let active = match file.session_type.as_deref() {
-            Some("playBreak" | "playbreak") => 1,
-            _ => 0,
-        };
-        (PomodoroSettings { sessions }, active)
+        let active_id = sessions[0].id.clone();
+        (PomodoroSettings { sessions }, active_id)
     } else {
         // No file yet — use defaults.
         let settings = PomodoroSettings::default();
-        (settings, 0)
+        let active_id = settings.sessions[0].id.clone();
+        (settings, active_id)
     }
 }
 
 /// Load settings from disk, migrating from the old format if necessary.
-pub fn load_settings() -> (PomodoroSettings, usize) {
+pub fn load_settings() -> (PomodoroSettings, String) {
     let file = load_settings_file();
     let has_legacy = file.sessions.is_none()
         && (file.work_minutes.is_some() || file.play_minutes.is_some());
-    let (settings, active) = settings_from_file(file);
+    let (settings, active_id) = settings_from_file(file);
     if has_legacy {
         // Persist the migration to disk so we don't migrate again.
-        save_settings(&settings.sessions, active);
+        save_settings(&settings.sessions, &active_id);
     }
-    (settings, active)
+    (settings, active_id)
 }
 
-/// Reads today's total work seconds from the daily file.
+/// Reads today's total tracked seconds from the record file (sum across all
+/// sessions and parts).
 pub fn load_daily_total() -> u64 {
-    let totals = load_daily_totals();
+    let record = load_record();
     let today = today_string();
-    totals.get(&today).copied().unwrap_or(0)
+    record
+        .get(&today)
+        .map(|day| {
+            day.values()
+                .flat_map(|session| session.values())
+                .sum()
+        })
+        .unwrap_or(0)
 }
 
-/// Adds `seconds` of work time to today's entry in the daily file.
-fn add_daily_work_seconds(seconds: u64) -> u64 {
-    let mut totals = load_daily_totals();
+/// Records `seconds` of tracked time for a specific session/part on today's
+/// date. Returns the new daily total.
+fn add_record_seconds(session_id: &str, part_index: usize, seconds: u64) -> u64 {
+    let mut record = load_record();
     let today = today_string();
-    let prev = totals.get(&today).copied().unwrap_or(0);
-    let new_total = prev + seconds;
-    totals.insert(today, new_total);
-    save_daily_totals(&totals);
-    new_total
+    let day_entry = record.entry(today).or_default();
+    let session_entry = day_entry.entry(session_id.to_string()).or_default();
+    let prev = session_entry
+        .get(&part_index.to_string())
+        .copied()
+        .unwrap_or(0);
+    session_entry.insert(part_index.to_string(), prev + seconds);
+    // Compute daily total before the mutable borrow ends.
+    let daily_total: u64 = day_entry
+        .values()
+        .flat_map(|s| s.values())
+        .sum();
+    save_record(&record);
+    daily_total
 }
 
 /// Build a TimerTick from the current state.
 fn build_tick(state: &PomodoroState, daily_total: u64) -> TimerTick {
-    let session = &state.settings.sessions[state.active_session_index];
+    let idx = find_session_index(&state.settings.sessions, &state.active_session_id)
+        .unwrap_or(0);
+    let session = &state.settings.sessions[idx];
     let part = &session.parts[state.current_part_index];
+    let part_name = if part.name.trim().is_empty() {
+        format!("Part {}", state.current_part_index + 1)
+    } else {
+        part.name.clone()
+    };
     TimerTick {
         remaining_seconds: state.remaining_seconds,
         session_name: session.name.clone(),
-        part_name: part.name.clone(),
+        part_name,
+        part_index: state.current_part_index,
         running: state.running,
         paused: state.paused,
         daily_total_seconds: daily_total,
-        active_session_index: state.active_session_index,
+        active_session_id: state.active_session_id.clone(),
         session_count: state.settings.sessions.len(),
     }
 }
@@ -370,18 +490,12 @@ fn validate_sessions(sessions: &[Session]) -> Result<(), String> {
                 session.name
             ));
         }
-        for (pi, part) in session.parts.iter().enumerate() {
-            if part.name.trim().is_empty() {
-                return Err(format!(
-                    "Part {} in session '{}' name cannot be empty",
-                    pi + 1,
-                    session.name
-                ));
-            }
+        for (_pi, part) in session.parts.iter().enumerate() {
             if part.minutes < 1 || part.minutes > 120 {
                 return Err(format!(
-                    "Part '{}' in session '{}' must be between 1 and 120 minutes",
-                    part.name, session.name
+                    "Part {} in session '{}' must be between 1 and 120 minutes",
+                    _pi + 1,
+                    session.name
                 ));
             }
         }
@@ -389,23 +503,24 @@ fn validate_sessions(sessions: &[Session]) -> Result<(), String> {
     Ok(())
 }
 
-/// Calculate work seconds to record when stopping a running timer.
-/// Returns `None` if the current part is not a "work" part or no time has elapsed.
-fn stop_work_seconds(
-    part_name: &str,
+/// Calculate tracked seconds to record when stopping a running timer.
+/// Returns `None` if the part does not have track_time enabled or no time
+/// has elapsed.
+fn stop_tracked_seconds(
+    track_time: bool,
     part_full_seconds: u64,
     paused: bool,
     remaining_seconds: i64,
-    overtime_work_seconds: u64,
+    overtime_tracked_seconds: u64,
 ) -> Option<u64> {
-    if !part_name.eq_ignore_ascii_case("work") {
+    if !track_time {
         return None;
     }
     if paused {
         // The full duration was already recorded when the part hit zero;
         // only the overtime seconds (accumulated past zero) are new.
-        if overtime_work_seconds > 0 {
-            Some(overtime_work_seconds)
+        if overtime_tracked_seconds > 0 {
+            Some(overtime_tracked_seconds)
         } else {
             None
         }
@@ -487,11 +602,12 @@ pub fn start_timer(
     // If paused, this acts as "continue" (legacy behaviour — start while paused
     // resumes without advancing).
     let sessions = s.settings.sessions.clone();
-    let active_idx = s.active_session_index;
+    let active_id = s.active_session_id.clone();
+    let active_idx = find_session_index(&sessions, &active_id).unwrap_or(0);
     let test_mode = s.test_mode;
     s.running = true;
     s.paused = false;
-    s.overtime_work_seconds = 0;
+    s.overtime_tracked_seconds = 0;
 
     // Emit an initial tick immediately so the frontend reflects the new
     // state without waiting for the first 1 s sleep in the timer thread.
@@ -502,17 +618,21 @@ pub fn start_timer(
 
     std::thread::spawn(move || {
         // Snapshot part metadata from the session at start time.
-        let part_names: Vec<String> = sessions[active_idx]
+        let _part_names: Vec<String> = sessions[active_idx]
             .parts.iter().map(|p| p.name.clone()).collect();
         let part_seconds: Vec<i64> = sessions[active_idx]
             .parts.iter().map(|p| minutes_to_seconds(p.minutes, test_mode)).collect();
         let part_extendable: Vec<bool> = sessions[active_idx]
             .parts.iter().map(|p| p.extendable).collect();
+        let part_track_time: Vec<bool> = sessions[active_idx]
+            .parts.iter().map(|p| p.track_time).collect();
+        let session_id = active_id;
 
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
 
-            let mut work_completed: Option<u64> = None;
+            let mut tracked_completed: Option<u64> = None;
+            let mut completed_part_index: Option<usize> = None;
             let mut phase_ended: bool = false;
 
             let tick = {
@@ -542,37 +662,47 @@ pub fn start_timer(
                         phase_ended = true;
                     }
 
-                    // Check if the completed part was "Work".
-                    if part_names[idx].eq_ignore_ascii_case("work") {
-                        work_completed = Some(part_seconds[idx].max(0) as u64);
+                    // Record the completed part duration if tracking is enabled.
+                    if part_track_time[idx] {
+                        tracked_completed = Some(part_seconds[idx].max(0) as u64);
+                        completed_part_index = Some(idx);
                     }
                 } else if s.paused {
                     // Overtime: keep decrementing into negative.
                     s.remaining_seconds -= 1;
-                    if part_names[s.current_part_index].eq_ignore_ascii_case("work") {
-                        s.overtime_work_seconds += 1;
+                    if part_track_time[s.current_part_index] {
+                        s.overtime_tracked_seconds += 1;
                     }
                 }
-                // Read session/part names from current state for display.
+                // Resolve session for display.
                 let sessions = &s.settings.sessions;
-                let session = &sessions[s.active_session_index];
+                let idx = find_session_index(sessions, &s.active_session_id)
+                    .unwrap_or(0);
+                let session = &sessions[idx];
                 let part = &session.parts[s.current_part_index];
+                let part_name = if part.name.trim().is_empty() {
+                    format!("Part {}", s.current_part_index + 1)
+                } else {
+                    part.name.clone()
+                };
                 let tick = TimerTick {
                     remaining_seconds: s.remaining_seconds,
                     session_name: session.name.clone(),
-                    part_name: part.name.clone(),
+                    part_name,
+                    part_index: s.current_part_index,
                     running: s.running,
                     paused: s.paused,
                     daily_total_seconds: 0,
-                    active_session_index: s.active_session_index,
+                    active_session_id: s.active_session_id.clone(),
                     session_count: sessions.len(),
                 };
                 drop(s);
                 tick
             };
 
-            if let Some(secs) = work_completed {
-                add_daily_work_seconds(secs);
+            if let Some(secs) = tracked_completed {
+                let pi = completed_part_index.unwrap_or(0);
+                add_record_seconds(&session_id, pi, secs);
             }
 
             let daily = load_daily_total();
@@ -602,28 +732,33 @@ pub fn stop_timer(
         return Err("Timer is not running".into());
     }
 
-    // Record partial work time.
-    let sessions = &s.settings.sessions;
-    let part = &sessions[s.active_session_index].parts[s.current_part_index];
+    // Record partial tracked time.
+    let sessions = s.settings.sessions.clone();
+    let idx = find_session_index(&sessions, &s.active_session_id).unwrap_or(0);
+    let part = &sessions[idx].parts[s.current_part_index];
     let full_seconds = minutes_to_seconds(part.minutes, s.test_mode) as u64;
-    if let Some(seconds) = stop_work_seconds(
-        &part.name,
+    let session_id = s.active_session_id.clone();
+    let part_index = s.current_part_index;
+
+    if let Some(seconds) = stop_tracked_seconds(
+        part.track_time,
         full_seconds,
         s.paused,
         s.remaining_seconds,
-        s.overtime_work_seconds,
+        s.overtime_tracked_seconds,
     ) {
         drop(s);
-        add_daily_work_seconds(seconds);
+        add_record_seconds(&session_id, part_index, seconds);
         s = state.lock().unwrap();
     }
 
     s.running = false;
     s.paused = false;
-    s.overtime_work_seconds = 0;
+    s.overtime_tracked_seconds = 0;
     s.current_part_index = 0;
+    let idx = find_session_index(&s.settings.sessions, &s.active_session_id).unwrap_or(0);
     s.remaining_seconds = minutes_to_seconds(
-        s.settings.sessions[s.active_session_index].parts[0].minutes,
+        s.settings.sessions[idx].parts[0].minutes,
         s.test_mode,
     );
 
@@ -645,15 +780,18 @@ pub fn continue_timer(
         return Err("Timer is not in an extendable pause".into());
     }
 
-    let part_seconds: Vec<i64> = s.settings.sessions[s.active_session_index]
+    let idx = find_session_index(&s.settings.sessions, &s.active_session_id).unwrap_or(0);
+    let part_seconds: Vec<i64> = s.settings.sessions[idx]
         .parts
         .iter()
         .map(|p| minutes_to_seconds(p.minutes, s.test_mode))
         .collect();
     let first_seconds = part_seconds[0];
+    let session_id = s.active_session_id.clone();
+    let part_index = s.current_part_index;
 
-    let overtime = s.overtime_work_seconds;
-    s.overtime_work_seconds = 0;
+    let overtime = s.overtime_tracked_seconds;
+    s.overtime_tracked_seconds = 0;
 
     let adv = continue_advance(s.current_part_index, &part_seconds, first_seconds);
     s.current_part_index = adv.new_part_index;
@@ -666,7 +804,7 @@ pub fn continue_timer(
     drop(s);
 
     if overtime > 0 {
-        add_daily_work_seconds(overtime);
+        add_record_seconds(&session_id, part_index, overtime);
     }
 
     let _ = app.emit("timer-tick", &tick);
@@ -681,28 +819,42 @@ pub fn update_settings(
 ) -> Result<PomodoroSettings, String> {
     validate_sessions(&sessions)?;
 
+    // Ensure all sessions have UUIDs (new sessions from frontend may not).
+    let sessions: Vec<Session> = sessions
+        .into_iter()
+        .map(|mut s| {
+            if s.id.is_empty() {
+                s.id = uuid::Uuid::new_v4().to_string();
+            }
+            s
+        })
+        .collect();
+
     let new_settings = PomodoroSettings {
         sessions: sessions.clone(),
     };
 
     let mut s = state.lock().unwrap();
-    // Clamp active index if sessions were removed.
-    if s.active_session_index >= sessions.len() {
-        s.active_session_index = sessions.len() - 1;
+    // If the active session UUID no longer exists (session deleted),
+    // fall back to the first session.
+    if find_session_index(&sessions, &s.active_session_id).is_none() {
+        s.active_session_id = sessions[0].id.clone();
     }
 
     s.settings = new_settings;
 
     // Persist.
-    save_settings(&s.settings.sessions, s.active_session_index);
+    save_settings(&s.settings.sessions, &s.active_session_id);
 
     // Reset display if stopped.
     if !s.running {
         s.paused = false;
-        s.overtime_work_seconds = 0;
+        s.overtime_tracked_seconds = 0;
         s.current_part_index = 0;
+        let idx = find_session_index(&s.settings.sessions, &s.active_session_id)
+            .unwrap_or(0);
         s.remaining_seconds = minutes_to_seconds(
-            s.settings.sessions[s.active_session_index].parts[0].minutes,
+            s.settings.sessions[idx].parts[0].minutes,
             s.test_mode,
         );
     }
@@ -723,27 +875,26 @@ pub fn update_settings(
 pub fn switch_session(
     app: AppHandle,
     state: State<'_, Mutex<PomodoroState>>,
-    index: usize,
+    session_id: String,
 ) -> Result<(), String> {
     let mut s = state.lock().unwrap();
     if s.running {
         return Err("Cannot switch session while timer is running".into());
     }
-    if index >= s.settings.sessions.len() {
-        return Err(format!(
-            "Session index {} out of range (0–{})",
-            index,
-            s.settings.sessions.len() - 1
-        ));
-    }
 
-    s.active_session_index = index;
+    let idx = find_session_index(&s.settings.sessions, &session_id)
+        .ok_or_else(|| format!("Session '{}' not found", session_id))?;
+
+    s.active_session_id = session_id;
     s.current_part_index = 0;
     s.paused = false;
-    s.overtime_work_seconds = 0;
-    s.remaining_seconds = minutes_to_seconds(s.settings.sessions[index].parts[0].minutes, s.test_mode);
+    s.overtime_tracked_seconds = 0;
+    s.remaining_seconds = minutes_to_seconds(
+        s.settings.sessions[idx].parts[0].minutes,
+        s.test_mode,
+    );
 
-    save_settings(&s.settings.sessions, s.active_session_index);
+    save_settings(&s.settings.sessions, &s.active_session_id);
 
     let daily = load_daily_total();
     let tick = build_tick(&s, daily);
@@ -844,14 +995,17 @@ mod tests {
         let settings = PomodoroSettings::default();
         assert_eq!(settings.sessions.len(), 1);
         let session = &settings.sessions[0];
+        assert!(!session.id.is_empty(), "session should have a UUID");
         assert_eq!(session.name, "Pomodoro");
         assert_eq!(session.parts.len(), 2);
         assert_eq!(session.parts[0].name, "Work");
         assert_eq!(session.parts[0].minutes, 25);
         assert!(!session.parts[0].extendable);
+        assert!(session.parts[0].track_time, "Work should have track_time=true");
         assert_eq!(session.parts[1].name, "Break");
         assert_eq!(session.parts[1].minutes, 5);
         assert!(!session.parts[1].extendable);
+        assert!(!session.parts[1].track_time, "Break should have track_time=false");
     }
 
     // ---- minutes_to_seconds ----
@@ -906,12 +1060,18 @@ mod tests {
         let sessions = legacy_sessions(&file);
         assert_eq!(sessions.len(), 2);
         // First session: Pomodoro (Work 30 / Break 10).
+        assert!(!sessions[0].id.is_empty());
+        assert!(sessions[0].parts[0].track_time, "Work should track time");
+        assert!(!sessions[0].parts[1].track_time, "Break should not track time");
         assert_eq!(sessions[0].name, "Pomodoro");
         assert_eq!(sessions[0].parts[0].name, "Work");
         assert_eq!(sessions[0].parts[0].minutes, 30);
         assert_eq!(sessions[0].parts[1].name, "Break");
         assert_eq!(sessions[0].parts[1].minutes, 10);
         // Second session: Play / Break (defaults 25/5).
+        assert!(!sessions[1].id.is_empty());
+        assert!(sessions[1].parts[0].track_time, "Play should track time");
+        assert!(!sessions[1].parts[1].track_time);
         assert_eq!(sessions[1].name, "Play / Break");
         assert_eq!(sessions[1].parts[0].name, "Play");
         assert_eq!(sessions[1].parts[0].minutes, 25);
@@ -961,23 +1121,25 @@ mod tests {
 
     #[test]
     fn build_tick_basic() {
+        let session_id = "test-sid-1".to_string();
         let settings = PomodoroSettings {
             sessions: vec![Session {
+                id: session_id.clone(),
                 name: "Test Session".into(),
                 parts: vec![
-                    SessionPart { name: "Focus".into(), minutes: 25, extendable: false },
-                    SessionPart { name: "Rest".into(), minutes: 5, extendable: false },
+                    SessionPart { name: "Focus".into(), minutes: 25, extendable: false, track_time: true },
+                    SessionPart { name: "Rest".into(), minutes: 5, extendable: false, track_time: false },
                 ],
             }],
         };
         let state = PomodoroState {
-            active_session_index: 0,
+            active_session_id: session_id,
             current_part_index: 0,
             remaining_seconds: 1500,
             settings,
             running: true,
             paused: false,
-            overtime_work_seconds: 0,
+            overtime_tracked_seconds: 0,
             is_docked: false,
             test_mode: false,
         };
@@ -985,31 +1147,34 @@ mod tests {
         assert_eq!(tick.remaining_seconds, 1500);
         assert_eq!(tick.session_name, "Test Session");
         assert_eq!(tick.part_name, "Focus");
+        assert_eq!(tick.part_index, 0);
         assert!(tick.running);
         assert!(!tick.paused);
         assert_eq!(tick.daily_total_seconds, 3600);
-        assert_eq!(tick.active_session_index, 0);
+        assert_eq!(tick.active_session_id, "test-sid-1");
         assert_eq!(tick.session_count, 1);
     }
 
     #[test]
     fn build_tick_paused() {
+        let session_id = "s1".to_string();
         let settings = PomodoroSettings {
             sessions: vec![Session {
+                id: session_id.clone(),
                 name: "S".into(),
                 parts: vec![
-                    SessionPart { name: "W".into(), minutes: 1, extendable: true },
+                    SessionPart { name: "W".into(), minutes: 1, extendable: true, track_time: false },
                 ],
             }],
         };
         let state = PomodoroState {
-            active_session_index: 0,
+            active_session_id: session_id,
             current_part_index: 0,
             remaining_seconds: -5,
             settings,
             running: true,
             paused: true,
-            overtime_work_seconds: 5,
+            overtime_tracked_seconds: 5,
             is_docked: false,
             test_mode: false,
         };
@@ -1017,6 +1182,37 @@ mod tests {
         assert_eq!(tick.remaining_seconds, -5);
         assert!(tick.paused);
         assert_eq!(tick.part_name, "W");
+        assert_eq!(tick.part_index, 0);
+    }
+
+    #[test]
+    fn build_tick_empty_part_name_fallback() {
+        let session_id = "sid-fallback".to_string();
+        let settings = PomodoroSettings {
+            sessions: vec![Session {
+                id: session_id.clone(),
+                name: "Test".into(),
+                parts: vec![
+                    SessionPart { name: "  ".into(), minutes: 10, extendable: false, track_time: false },
+                    SessionPart { name: "  ".into(), minutes: 10, extendable: false, track_time: false },
+                    SessionPart { name: "  ".into(), minutes: 10, extendable: false, track_time: false },
+                ],
+            }],
+        };
+        let state = PomodoroState {
+            active_session_id: session_id,
+            current_part_index: 2,   // 0-based → "Part 3"
+            remaining_seconds: 600,
+            settings,
+            running: false,
+            paused: false,
+            overtime_tracked_seconds: 0,
+            is_docked: false,
+            test_mode: false,
+        };
+        let tick = build_tick(&state, 0);
+        assert_eq!(tick.part_name, "Part 3");
+        assert_eq!(tick.part_index, 2);
     }
 
     // ---- validate_sessions ----
@@ -1029,7 +1225,7 @@ mod tests {
     #[test]
     fn validate_sessions_too_many() {
         let too_many: Vec<Session> = (0..6)
-            .map(|i| Session { name: format!("S{}", i), parts: vec![] })
+            .map(|i| Session { id: format!("s{}", i), name: format!("S{}", i), parts: vec![] })
             .collect();
         assert!(validate_sessions(&too_many).is_err());
     }
@@ -1038,8 +1234,9 @@ mod tests {
     fn validate_sessions_five_ok() {
         let five: Vec<Session> = (0..5)
             .map(|i| Session {
+                id: format!("s{}", i),
                 name: format!("S{}", i),
-                parts: vec![SessionPart { name: "P".into(), minutes: 1, extendable: false }],
+                parts: vec![SessionPart { name: "P".into(), minutes: 1, extendable: false, track_time: false }],
             })
             .collect();
         assert!(validate_sessions(&five).is_ok());
@@ -1048,24 +1245,26 @@ mod tests {
     #[test]
     fn validate_empty_session_name() {
         let sessions = vec![Session {
+            id: "x".into(),
             name: "   ".into(),
-            parts: vec![SessionPart { name: "P".into(), minutes: 1, extendable: false }],
+            parts: vec![SessionPart { name: "P".into(), minutes: 1, extendable: false, track_time: false }],
         }];
         assert!(validate_sessions(&sessions).is_err());
     }
 
     #[test]
     fn validate_zero_parts() {
-        let sessions = vec![Session { name: "S".into(), parts: vec![] }];
+        let sessions = vec![Session { id: "x".into(), name: "S".into(), parts: vec![] }];
         assert!(validate_sessions(&sessions).is_err());
     }
 
     #[test]
     fn validate_eleven_parts() {
         let sessions = vec![Session {
+            id: "x".into(),
             name: "S".into(),
             parts: (0..11)
-                .map(|i| SessionPart { name: format!("P{}", i), minutes: 1, extendable: false })
+                .map(|i| SessionPart { name: format!("P{}", i), minutes: 1, extendable: false, track_time: false })
                 .collect(),
         }];
         assert!(validate_sessions(&sessions).is_err());
@@ -1074,28 +1273,21 @@ mod tests {
     #[test]
     fn validate_ten_parts_ok() {
         let sessions = vec![Session {
+            id: "x".into(),
             name: "S".into(),
             parts: (0..10)
-                .map(|i| SessionPart { name: format!("P{}", i), minutes: 1, extendable: false })
+                .map(|i| SessionPart { name: format!("P{}", i), minutes: 1, extendable: false, track_time: false })
                 .collect(),
         }];
         assert!(validate_sessions(&sessions).is_ok());
     }
 
     #[test]
-    fn validate_empty_part_name() {
-        let sessions = vec![Session {
-            name: "S".into(),
-            parts: vec![SessionPart { name: "  ".into(), minutes: 1, extendable: false }],
-        }];
-        assert!(validate_sessions(&sessions).is_err());
-    }
-
-    #[test]
     fn validate_minutes_zero() {
         let sessions = vec![Session {
+            id: "x".into(),
             name: "S".into(),
-            parts: vec![SessionPart { name: "P".into(), minutes: 0, extendable: false }],
+            parts: vec![SessionPart { name: "P".into(), minutes: 0, extendable: false, track_time: false }],
         }];
         assert!(validate_sessions(&sessions).is_err());
     }
@@ -1103,8 +1295,9 @@ mod tests {
     #[test]
     fn validate_minutes_121() {
         let sessions = vec![Session {
+            id: "x".into(),
             name: "S".into(),
-            parts: vec![SessionPart { name: "P".into(), minutes: 121, extendable: false }],
+            parts: vec![SessionPart { name: "P".into(), minutes: 121, extendable: false, track_time: false }],
         }];
         assert!(validate_sessions(&sessions).is_err());
     }
@@ -1112,8 +1305,9 @@ mod tests {
     #[test]
     fn validate_minutes_120_ok() {
         let sessions = vec![Session {
+            id: "x".into(),
             name: "S".into(),
-            parts: vec![SessionPart { name: "P".into(), minutes: 120, extendable: false }],
+            parts: vec![SessionPart { name: "P".into(), minutes: 120, extendable: false, track_time: false }],
         }];
         assert!(validate_sessions(&sessions).is_ok());
     }
@@ -1122,74 +1316,68 @@ mod tests {
     fn validate_valid_config() {
         let sessions = vec![
             Session {
+                id: "a".into(),
                 name: "Pomodoro".into(),
                 parts: vec![
-                    SessionPart { name: "Work".into(), minutes: 25, extendable: false },
-                    SessionPart { name: "Break".into(), minutes: 5, extendable: false },
+                    SessionPart { name: "Work".into(), minutes: 25, extendable: false, track_time: true },
+                    SessionPart { name: "Break".into(), minutes: 5, extendable: false, track_time: false },
                 ],
             },
             Session {
+                id: "b".into(),
                 name: "Play / Break".into(),
                 parts: vec![
-                    SessionPart { name: "Play".into(), minutes: 25, extendable: true },
-                    SessionPart { name: "Break".into(), minutes: 10, extendable: false },
+                    SessionPart { name: "Play".into(), minutes: 25, extendable: true, track_time: false },
+                    SessionPart { name: "Break".into(), minutes: 10, extendable: false, track_time: false },
                 ],
             },
         ];
         assert!(validate_sessions(&sessions).is_ok());
     }
 
-    // ---- stop_work_seconds ----
+    // ---- stop_tracked_seconds ----
 
     #[test]
-    fn stop_work_non_work_part() {
-        // "Break" parts should never record work seconds.
-        assert_eq!(stop_work_seconds("Break", 300, false, 200, 0), None);
+    fn stop_tracked_when_disabled() {
+        // track_time=false — never record.
+        assert_eq!(stop_tracked_seconds(false, 300, false, 200, 0), None);
     }
 
     #[test]
-    fn stop_work_mid_session() {
-        // 25-min work part, 500s elapsed (1000s remaining).
-        assert_eq!(stop_work_seconds("Work", 1500, false, 1000, 0), Some(500));
+    fn stop_tracked_mid_session() {
+        // track_time=true, 500s elapsed (1000s remaining).
+        assert_eq!(stop_tracked_seconds(true, 1500, false, 1000, 0), Some(500));
     }
 
     #[test]
-    fn stop_work_no_elapsed() {
+    fn stop_tracked_no_elapsed() {
         // Just started, no time elapsed.
-        assert_eq!(stop_work_seconds("Work", 1500, false, 1500, 0), None);
+        assert_eq!(stop_tracked_seconds(true, 1500, false, 1500, 0), None);
     }
 
     #[test]
-    fn stop_work_fully_elapsed() {
+    fn stop_tracked_fully_elapsed() {
         // Timer hit zero exactly (non-extendable).
-        assert_eq!(stop_work_seconds("Work", 1500, false, 0, 0), Some(1500));
+        assert_eq!(stop_tracked_seconds(true, 1500, false, 0, 0), Some(1500));
     }
 
     #[test]
-    fn stop_work_paused_with_overtime() {
+    fn stop_tracked_paused_with_overtime() {
         // Paused in overtime, accumulated 30 overtime seconds.
-        assert_eq!(stop_work_seconds("Work", 1500, true, -30, 30), Some(30));
+        assert_eq!(stop_tracked_seconds(true, 1500, true, -30, 30), Some(30));
     }
 
     #[test]
-    fn stop_work_paused_no_overtime() {
+    fn stop_tracked_paused_no_overtime() {
         // Paused exactly at zero, no overtime accumulated yet.
-        assert_eq!(stop_work_seconds("Work", 1500, true, 0, 0), None);
+        assert_eq!(stop_tracked_seconds(true, 1500, true, 0, 0), None);
     }
 
     #[test]
-    fn stop_work_case_insensitive() {
-        // "WORK", "work", "Work" should all match.
-        assert_eq!(stop_work_seconds("WORK", 1500, false, 0, 0), Some(1500));
-        assert_eq!(stop_work_seconds("work", 1500, false, 0, 0), Some(1500));
-        assert_eq!(stop_work_seconds("wOrK", 1500, false, 0, 0), Some(1500));
-    }
-
-    #[test]
-    fn stop_work_remaining_negative_not_paused() {
+    fn stop_tracked_remaining_negative_not_paused() {
         // Edge case: negative remaining without paused flag (shouldn't
         // happen in practice, but function handles it gracefully).
-        let result = stop_work_seconds("Work", 1500, false, -10, 0);
+        let result = stop_tracked_seconds(true, 1500, false, -10, 0);
         // full.saturating_sub(-10) = 1500 - (-10) = 1510, capped by max(0) → 1510
         assert_eq!(result, Some(1510));
     }
@@ -1272,69 +1460,75 @@ mod tests {
         let file = SettingsFile {
             sessions: Some(vec![
                 SessionDef {
+                    id: "sid-a".into(),
                     name: "Pomodoro".into(),
                     parts: vec![
-                        PartDef { name: "Work".into(), minutes: 25, extendable: true },
-                        PartDef { name: "Break".into(), minutes: 5, extendable: false },
+                        PartDef { name: "Work".into(), minutes: 25, extendable: true, track_time: true },
+                        PartDef { name: "Break".into(), minutes: 5, extendable: false, track_time: false },
                     ],
                 },
                 SessionDef {
+                    id: "sid-b".into(),
                     name: "Deep Focus".into(),
                     parts: vec![
-                        PartDef { name: "Focus".into(), minutes: 50, extendable: true },
-                        PartDef { name: "Rest".into(), minutes: 10, extendable: false },
+                        PartDef { name: "Focus".into(), minutes: 50, extendable: true, track_time: false },
+                        PartDef { name: "Rest".into(), minutes: 10, extendable: false, track_time: false },
                     ],
                 },
             ]),
-            active_session: Some(1),
+            active_session: Some(serde_json::Value::String("sid-b".into())),
             ..Default::default()
         };
         let (settings, active) = settings_from_file(file);
         assert_eq!(settings.sessions.len(), 2);
         assert_eq!(settings.sessions[0].parts[0].extendable, true);
+        assert_eq!(settings.sessions[0].parts[0].track_time, true);
         assert_eq!(settings.sessions[1].name, "Deep Focus");
         assert_eq!(settings.sessions[1].parts[0].minutes, 50);
         assert_eq!(settings.sessions[1].parts[1].minutes, 10);
-        assert_eq!(active, 1);
+        assert_eq!(active, "sid-b");
     }
 
     #[test]
     fn settings_from_file_active_index_clamped() {
-        // Active index beyond bounds should be clamped to last valid index.
+        // Old numeric active index beyond bounds → fall back to first session.
         let file = SettingsFile {
             sessions: Some(vec![
                 SessionDef {
+                    id: "a1".into(),
                     name: "A".into(),
-                    parts: vec![PartDef { name: "X".into(), minutes: 1, extendable: false }],
+                    parts: vec![PartDef { name: "X".into(), minutes: 1, extendable: false, track_time: false }],
                 },
                 SessionDef {
+                    id: "b2".into(),
                     name: "B".into(),
-                    parts: vec![PartDef { name: "Y".into(), minutes: 1, extendable: false }],
+                    parts: vec![PartDef { name: "Y".into(), minutes: 1, extendable: false, track_time: false }],
                 },
             ]),
-            active_session: Some(99), // way out of bounds
+            active_session: Some(serde_json::Value::Number(99.into())),
             ..Default::default()
         };
         let (settings, active) = settings_from_file(file);
-        assert_eq!(active, 1); // clamped to sessions.len() - 1
+        assert_eq!(active, "a1"); // out of bounds → first session UUID
         assert_eq!(settings.sessions.len(), 2);
     }
 
     #[test]
     fn settings_from_file_new_format_no_active() {
-        // active_session missing from file → default to 0.
+        // active_session missing from file → default to first session's UUID.
         let file = SettingsFile {
             sessions: Some(vec![
                 SessionDef {
+                    id: "solo-id".into(),
                     name: "Solo".into(),
-                    parts: vec![PartDef { name: "Task".into(), minutes: 30, extendable: false }],
+                    parts: vec![PartDef { name: "Task".into(), minutes: 30, extendable: false, track_time: false }],
                 },
             ]),
             active_session: None,
             ..Default::default()
         };
         let (_, active) = settings_from_file(file);
-        assert_eq!(active, 0);
+        assert_eq!(active, "solo-id");
     }
 
     #[test]
@@ -1342,14 +1536,16 @@ mod tests {
         // Completely empty SettingsFile → PomodoroSettings::default().
         let file = SettingsFile::default();
         let (settings, active) = settings_from_file(file);
+        assert!(!active.is_empty(), "should get a UUID from defaults");
         assert_eq!(settings.sessions.len(), 1);
         assert_eq!(settings.sessions[0].name, "Pomodoro");
         assert_eq!(settings.sessions[0].parts.len(), 2);
         assert_eq!(settings.sessions[0].parts[0].name, "Work");
         assert_eq!(settings.sessions[0].parts[0].minutes, 25);
+        assert!(settings.sessions[0].parts[0].track_time);
         assert_eq!(settings.sessions[0].parts[1].name, "Break");
         assert_eq!(settings.sessions[0].parts[1].minutes, 5);
-        assert_eq!(active, 0);
+        assert!(!settings.sessions[0].parts[1].track_time);
     }
 
     // ---- JSON round-trip ----
@@ -1358,32 +1554,37 @@ mod tests {
     fn json_roundtrip_preserves_extendable() {
         // Session → JSON → Session — all fields survive, especially extendable.
         let original = Session {
+            id: "json-rt-1".into(),
             name: "Test".into(),
             parts: vec![
-                SessionPart { name: "Focus".into(), minutes: 45, extendable: true },
-                SessionPart { name: "Break".into(), minutes: 15, extendable: false },
+                SessionPart { name: "Focus".into(), minutes: 45, extendable: true, track_time: true },
+                SessionPart { name: "Break".into(), minutes: 15, extendable: false, track_time: false },
             ],
         };
         let json = serde_json::to_string(&original).expect("serialize");
         let parsed: Session = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.id, "json-rt-1");
         assert_eq!(parsed.name, "Test");
         assert_eq!(parsed.parts.len(), 2);
         assert_eq!(parsed.parts[0].name, "Focus");
         assert_eq!(parsed.parts[0].minutes, 45);
         assert_eq!(parsed.parts[0].extendable, true);
+        assert_eq!(parsed.parts[0].track_time, true);
         assert_eq!(parsed.parts[1].name, "Break");
         assert_eq!(parsed.parts[1].minutes, 15);
         assert_eq!(parsed.parts[1].extendable, false);
+        assert_eq!(parsed.parts[1].track_time, false);
     }
 
     #[test]
     fn json_deserialize_missing_extendable_defaults_false() {
-        // If the JSON omits "extendable", serde should default it to false.
+        // If the JSON omits "extendable" and "track_time", defaults kick in.
         let json = r#"{"name":"Work","minutes":25}"#;
         let part: SessionPart = serde_json::from_str(json).expect("deserialize");
         assert_eq!(part.name, "Work");
         assert_eq!(part.minutes, 25);
         assert!(!part.extendable, "missing extendable should default to false");
+        assert!(!part.track_time, "missing track_time should default to false");
     }
 
     #[test]
@@ -1396,31 +1597,43 @@ mod tests {
     }
 
     #[test]
+    fn json_deserialize_track_time_true() {
+        let json = r#"{"name":"Work","minutes":25,"extendable":false,"track_time":true}"#;
+        let part: SessionPart = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(part.name, "Work");
+        assert_eq!(part.minutes, 25);
+        assert!(part.track_time);
+    }
+
+    #[test]
     fn json_settings_file_roundtrip() {
         // Full SettingsFile → JSON → SettingsFile round-trip.
         let file = SettingsFile {
             sessions: Some(vec![
                 SessionDef {
+                    id: "roundtrip-sid".into(),
                     name: "Pomodoro".into(),
                     parts: vec![
-                        PartDef { name: "Work".into(), minutes: 30, extendable: true },
-                        PartDef { name: "Break".into(), minutes: 10, extendable: false },
+                        PartDef { name: "Work".into(), minutes: 30, extendable: true, track_time: true },
+                        PartDef { name: "Break".into(), minutes: 10, extendable: false, track_time: false },
                     ],
                 },
             ]),
-            active_session: Some(0),
+            active_session: Some(serde_json::Value::Number(0.into())),
             ..Default::default()
         };
         let json = serde_json::to_string(&file).expect("serialize");
         let parsed: SettingsFile = serde_json::from_str(&json).expect("deserialize");
         let sessions = parsed.sessions.expect("sessions present");
         assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "roundtrip-sid");
         assert_eq!(sessions[0].name, "Pomodoro");
         assert_eq!(sessions[0].parts[0].minutes, 30);
         assert_eq!(sessions[0].parts[0].extendable, true);
+        assert_eq!(sessions[0].parts[0].track_time, true);
         assert_eq!(sessions[0].parts[1].name, "Break");
         assert_eq!(sessions[0].parts[1].minutes, 10);
         assert_eq!(sessions[0].parts[1].extendable, false);
-        assert_eq!(parsed.active_session, Some(0));
+        assert_eq!(sessions[0].parts[1].track_time, false);
     }
 }

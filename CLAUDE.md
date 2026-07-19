@@ -30,7 +30,7 @@ Two test suites — run both before tagging a release:
 # 1. Rust unit tests (44 tests — state logic, date math, serialization, validation)
 cd src-tauri && cargo test
 
-# 2. UI tests (49 tests — runs app.js in a Node.js vm sandbox with mocked
+# 2. UI tests (48 tests — runs app.js in a Node.js vm sandbox with mocked
 #    DOM, Tauri API, and AudioContext; no npm install needed, Node 18+)
 node ui/test/test.js
 ```

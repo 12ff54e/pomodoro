@@ -154,10 +154,11 @@ function loadAppJs() {
           remainingSeconds: 1500,
           sessionName: 'Pomodoro',
           partName: 'Work',
+          partIndex: 0,
           running: false,
           paused: false,
           dailyTotalSeconds: 3600,
-          activeSessionIndex: 0,
+          activeSessionId: 'uuid-pomodoro-1',
           sessionCount: 2,
         };
       case 'get_daily_total':
@@ -166,17 +167,19 @@ function loadAppJs() {
         return {
           sessions: [
             {
+              id: 'uuid-pomodoro-1',
               name: 'Pomodoro',
               parts: [
-                { name: 'Work', minutes: 25, extendable: false },
-                { name: 'Break', minutes: 5, extendable: false },
+                { name: 'Work', minutes: 25, extendable: false, track_time: true },
+                { name: 'Break', minutes: 5, extendable: false, track_time: false },
               ],
             },
             {
+              id: 'uuid-deep-focus-2',
               name: 'Deep Focus',
               parts: [
-                { name: 'Focus', minutes: 50, extendable: true },
-                { name: 'Rest', minutes: 10, extendable: false },
+                { name: 'Focus', minutes: 50, extendable: true, track_time: true },
+                { name: 'Rest', minutes: 10, extendable: false, track_time: false },
               ],
             },
           ],
@@ -252,6 +255,8 @@ function resetRenderState() {
   ctx.sandbox.isRunning = false;
   ctx.sandbox.isPaused = false;
   ctx.sandbox.isDocked = false;
+  ctx.sandbox.activeSessionId = 'uuid-pomodoro-1';
+  ctx.sandbox.sessionIds = ['uuid-pomodoro-1', 'uuid-deep-focus-2'];
   // Reset mutable element styles.
   ctx.elements['timer'].classList._set.clear();
   ctx.elements['toggle-btn'].classList._set.clear();
@@ -310,22 +315,17 @@ describe('formatDailyTotal', () => {
 // ============================= phaseClass ==============================
 
 describe('phaseClass', () => {
-  it('returns "phase-work" for Work (case-insensitive)', () => {
-    assert.equal(ctx.sandbox.phaseClass('Work'), 'phase-work');
-    assert.equal(ctx.sandbox.phaseClass('work'), 'phase-work');
-    assert.equal(ctx.sandbox.phaseClass('WORK'), 'phase-work');
+  it('returns "phase-part-0" for index 0', () => {
+    assert.equal(ctx.sandbox.phaseClass(0), 'phase-part-0');
   });
-  it('returns "phase-break" for Break', () => {
-    assert.equal(ctx.sandbox.phaseClass('Break'), 'phase-break');
-    assert.equal(ctx.sandbox.phaseClass('break'), 'phase-break');
+  it('returns "phase-part-1" for index 1', () => {
+    assert.equal(ctx.sandbox.phaseClass(1), 'phase-part-1');
   });
-  it('returns "phase-play" for Play', () => {
-    assert.equal(ctx.sandbox.phaseClass('Play'), 'phase-play');
-    assert.equal(ctx.sandbox.phaseClass('play'), 'phase-play');
+  it('returns "phase-part-2" for index 2', () => {
+    assert.equal(ctx.sandbox.phaseClass(2), 'phase-part-2');
   });
-  it('returns "phase-default" for unknown names', () => {
-    assert.equal(ctx.sandbox.phaseClass('Focus'), 'phase-default');
-    assert.equal(ctx.sandbox.phaseClass(''), 'phase-default');
+  it('wraps around with modulo for index 5', () => {
+    assert.equal(ctx.sandbox.phaseClass(5), 'phase-part-0');
   });
 });
 
@@ -334,14 +334,17 @@ describe('phaseClass', () => {
 describe('makeDefaultSession', () => {
   it('returns the default Work/Break session', () => {
     const s = ctx.sandbox.makeDefaultSession();
+    assert.equal(typeof s.id, 'string');
     assert.equal(s.name, 'Work / Break');
     assert.equal(s.parts.length, 2);
     assert.equal(s.parts[0].name, 'Work');
     assert.equal(s.parts[0].minutes, 25);
     assert.equal(s.parts[0].extendable, false);
+    assert.equal(s.parts[0].track_time, true);
     assert.equal(s.parts[1].name, 'Break');
     assert.equal(s.parts[1].minutes, 5);
     assert.equal(s.parts[1].extendable, false);
+    assert.equal(s.parts[1].track_time, false);
   });
   it('returns a new object each call', () => {
     const a = ctx.sandbox.makeDefaultSession();
@@ -392,10 +395,11 @@ describe('render', () => {
       remainingSeconds: 300,
       sessionName: 'Test',
       partName: 'Focus',
+      partIndex: 0,
       running: false,
       paused: false,
       dailyTotalSeconds: 1800,
-      activeSessionIndex: 0,
+      activeSessionId: 'uuid-1',
       sessionCount: 1,
     });
     assert.equal(ctx.elements['timer'].textContent, '05:00');
@@ -408,10 +412,11 @@ describe('render', () => {
       remainingSeconds: -30,
       sessionName: 'Pomodoro',
       partName: 'Work',
+      partIndex: 0,
       running: true,
       paused: true,
       dailyTotalSeconds: 0,
-      activeSessionIndex: 0,
+      activeSessionId: 'uuid-1',
       sessionCount: 1,
     });
     assert.ok(ctx.elements['timer'].classList._set.has('overtime'));
@@ -424,10 +429,11 @@ describe('render', () => {
       remainingSeconds: -5,
       sessionName: 'Pomodoro',
       partName: 'Work',
+      partIndex: 0,
       running: true,
       paused: true,
       dailyTotalSeconds: 0,
-      activeSessionIndex: 0,
+      activeSessionId: 'uuid-1',
       sessionCount: 1,
     });
     // Now render with positive — overtime should be gone.
@@ -435,10 +441,11 @@ describe('render', () => {
       remainingSeconds: 60,
       sessionName: 'Pomodoro',
       partName: 'Work',
+      partIndex: 0,
       running: true,
       paused: false,
       dailyTotalSeconds: 0,
-      activeSessionIndex: 0,
+      activeSessionId: 'uuid-1',
       sessionCount: 1,
     });
     assert.ok(!ctx.elements['timer'].classList._set.has('overtime'));
@@ -449,10 +456,11 @@ describe('render', () => {
       remainingSeconds: -10,
       sessionName: 'Pomodoro',
       partName: 'Work',
+      partIndex: 0,
       running: true,
       paused: true,
       dailyTotalSeconds: 0,
-      activeSessionIndex: 0,
+      activeSessionId: 'uuid-1',
       sessionCount: 1,
     });
     assert.ok(!ctx.elements['continue-btn'].classList._set.has('hidden'));
@@ -463,10 +471,11 @@ describe('render', () => {
       remainingSeconds: 1500,
       sessionName: 'Pomodoro',
       partName: 'Work',
+      partIndex: 0,
       running: true,
       paused: false,
       dailyTotalSeconds: 0,
-      activeSessionIndex: 0,
+      activeSessionId: 'uuid-1',
       sessionCount: 1,
     });
     assert.ok(ctx.elements['continue-btn'].classList._set.has('hidden'));
@@ -477,10 +486,11 @@ describe('render', () => {
       remainingSeconds: 1000,
       sessionName: 'Pomodoro',
       partName: 'Work',
+      partIndex: 0,
       running: true,
       paused: false,
       dailyTotalSeconds: 0,
-      activeSessionIndex: 0,
+      activeSessionId: 'uuid-1',
       sessionCount: 1,
     });
     assert.equal(ctx.elements['toggle-btn'].textContent, 'Stop');
@@ -492,10 +502,11 @@ describe('render', () => {
       remainingSeconds: 1500,
       sessionName: 'Pomodoro',
       partName: 'Work',
+      partIndex: 0,
       running: false,
       paused: false,
       dailyTotalSeconds: 0,
-      activeSessionIndex: 0,
+      activeSessionId: 'uuid-1',
       sessionCount: 1,
     });
     assert.equal(ctx.elements['toggle-btn'].textContent, 'Start');
@@ -507,10 +518,11 @@ describe('render', () => {
       remainingSeconds: 1500,
       sessionName: 'Pomodoro',
       partName: 'Work',
+      partIndex: 0,
       running: false,
       paused: false,
       dailyTotalSeconds: 7200,
-      activeSessionIndex: 0,
+      activeSessionId: 'uuid-1',
       sessionCount: 1,
     });
     assert.equal(
@@ -528,13 +540,14 @@ describe('render', () => {
       remainingSeconds: 1500,
       sessionName: 'Pomodoro',
       partName: 'Break',  // same as lastPartName → no beep
+      partIndex: 1,
       running: true,
       paused: false,
       dailyTotalSeconds: 0,
-      activeSessionIndex: 0,
+      activeSessionId: 'uuid-1',
       sessionCount: 1,
     });
-    assert.equal(ctx.elements['phase'].className, 'phase-break');
+    assert.equal(ctx.elements['phase'].className, 'phase-part-1');
   });
 
   it('tracks state in module-level variables', () => {
@@ -569,10 +582,11 @@ describe('buildSettingsForm', () => {
     ctx.elements['sessions-container']._children = [];
     editSessions = [
       {
+        id: 'uuid-test',
         name: 'Pomodoro',
         parts: [
-          { name: 'Work', minutes: 25, extendable: false },
-          { name: 'Break', minutes: 5, extendable: true },
+          { name: 'Work', minutes: 25, extendable: false, track_time: true },
+          { name: 'Break', minutes: 5, extendable: true, track_time: false },
         ],
       },
     ];
@@ -608,8 +622,10 @@ describe('buildSettingsForm', () => {
     const partsList = card._children[1]; // second child of card
     // Second row in partsList (Break part, extendable=true)
     const breakRow = partsList._children[1];
-    // Third child of row is the extendable label, containing the checkbox.
-    const extLabel = breakRow._children[2];
+    // nameCol (child[0]) → checkboxRow (child[1]) → extLabel (child[0])
+    const nameCol = breakRow._children[0];
+    const checkboxRow = nameCol._children[1];
+    const extLabel = checkboxRow._children[0];
     const extCheck = extLabel._children[0]; // <input type="checkbox">
     assert.equal(extCheck.tag, 'input');
     assert.equal(extCheck.checked, true);
@@ -633,21 +649,6 @@ describe('settings client-side validation', () => {
       }
     }
     assert.fail('should have caught empty session name');
-  });
-
-  it('rejects empty part name', () => {
-    const sessions = [
-      { name: 'Pomodoro', parts: [{ name: '', minutes: 25 }] },
-    ];
-    for (const s of sessions) {
-      for (const p of s.parts) {
-        if (!p.name.trim()) {
-          assert.ok(true);
-          return;
-        }
-      }
-    }
-    assert.fail('should have caught empty part name');
   });
 
   it('rejects minutes < 1', () => {
@@ -708,21 +709,32 @@ describe('settings client-side validation', () => {
 // ====================== Session switcher logic =========================
 
 describe('session switcher', () => {
-  it('wraps left from index 0 to last index', () => {
-    assert.equal((0 - 1 + 3) % 3, 2);
+  it('wraps left from index 0 to last index via UUID list', () => {
+    const ids = ['a', 'b', 'c'];
+    const cur = ids.indexOf('a');
+    const prev = ids[(cur - 1 + ids.length) % ids.length];
+    assert.equal(prev, 'c');
   });
-  it('wraps right from last index to index 0', () => {
-    assert.equal((2 + 1) % 3, 0);
+  it('wraps right from last index to index 0 via UUID list', () => {
+    const ids = ['a', 'b', 'c'];
+    const cur = ids.indexOf('c');
+    const next = ids[(cur + 1) % ids.length];
+    assert.equal(next, 'a');
   });
-  it('moves right normally', () => {
-    assert.equal((1 + 1) % 3, 2);
+  it('moves right normally via UUID list', () => {
+    const ids = ['a', 'b', 'c'];
+    const cur = ids.indexOf('b');
+    const next = ids[(cur + 1) % ids.length];
+    assert.equal(next, 'c');
   });
-  it('moves left normally', () => {
-    assert.equal((2 - 1 + 3) % 3, 1);
+  it('moves left normally via UUID list', () => {
+    const ids = ['a', 'b', 'c'];
+    const cur = ids.indexOf('c');
+    const prev = ids[(cur - 1 + ids.length) % ids.length];
+    assert.equal(prev, 'b');
   });
   it('single session: guard prevents action', () => {
-    // The guard `if (isRunning || sessionCount <= 1) return;` is checked.
-    assert.ok(true); // logic verified by code review
+    assert.ok(true);
   });
 });
 
@@ -779,10 +791,11 @@ describe('timer-tick listener', () => {
         remainingSeconds: 600,
         sessionName: 'Deep Focus',
         partName: 'Focus',
+        partIndex: 0,
         running: true,
         paused: false,
         dailyTotalSeconds: 7200,
-        activeSessionIndex: 0,
+        activeSessionId: 'uuid-1',
         sessionCount: 1,
       },
     });

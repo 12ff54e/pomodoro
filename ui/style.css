@@ -100,22 +100,26 @@ body {
   margin-bottom: 24px;
   transition: background 0.3s, color 0.3s;
 }
-.phase-work {
+/* Part colour by index (wraps via modulo in JS) */
+.phase-part-0 {
   background: rgba(233, 69, 96, 0.2);
   color: #e94560;
 }
-.phase-break {
+.phase-part-1 {
   background: rgba(22, 199, 154, 0.2);
   color: #16c79a;
 }
-.phase-play {
+.phase-part-2 {
   background: rgba(100, 149, 237, 0.2);
   color: #6495ed;
 }
-/* Fallback for custom part names */
-.phase-default {
-  background: rgba(180, 180, 180, 0.2);
-  color: #b4b4b4;
+.phase-part-3 {
+  background: rgba(255, 193, 7, 0.2);
+  color: #ffc107;
+}
+.phase-part-4 {
+  background: rgba(180, 130, 255, 0.2);
+  color: #b482ff;
 }
 
 /* ---- Timer ---- */
@@ -271,17 +275,28 @@ body {
 }
 .part-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
 }
-.part-row input[type="text"] {
+.part-name-col {
   flex: 1;
+  min-width: 0;
+}
+.part-name-col input[type="text"] {
+  width: 100%;
   padding: 5px 8px;
   border: 1px solid #0f3460;
   border-radius: 4px;
   background: #16213e;
   color: #e0e0e0;
   font-size: 0.85rem;
+  box-sizing: border-box;
+}
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 3px;
 }
 .part-row input[type="number"] {
   width: 56px;

@@ -6,20 +6,25 @@ mod timer;
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let (settings, active_index) = timer::load_settings();
+            let (settings, active_id) = timer::load_settings();
             let test_mode = std::env::var("POMODORO_TEST_MODE")
                 .map(|v| v == "1")
                 .unwrap_or(false);
+            let active_idx = settings
+                .sessions
+                .iter()
+                .position(|s| s.id == active_id)
+                .unwrap_or(0);
             let remaining =
-                timer::minutes_to_seconds(settings.sessions[active_index].parts[0].minutes, test_mode);
+                timer::minutes_to_seconds(settings.sessions[active_idx].parts[0].minutes, test_mode);
             let state = timer::PomodoroState {
-                active_session_index: active_index,
+                active_session_id: active_id,
                 current_part_index: 0,
                 remaining_seconds: remaining,
                 settings,
                 running: false,
                 paused: false,
-                overtime_work_seconds: 0,
+                overtime_tracked_seconds: 0,
                 is_docked: false,
                 test_mode,
             };

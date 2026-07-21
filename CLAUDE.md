@@ -22,13 +22,45 @@ cd src-tauri && cargo build --release
 cargo tauri dev
 ```
 
+### Android
+
+**Prerequisites:** Android SDK at `D:\app-dev-tools`, JDK 21 at `D:\app-dev-tools\jdk-21.0.2`,
+NDK 27 at `D:\app-dev-tools\ndk\27.0.12077973`.  The emulator must already be running.
+
+```bash
+# Full build (Rust + Gradle, installs to connected device/emulator)
+export PATH="/c/msys64/mingw64/bin:$PATH"
+export ANDROID_HOME="D:\\app-dev-tools"
+export ANDROID_SDK_ROOT="D:\\app-dev-tools"
+export JAVA_HOME="D:\\app-dev-tools\\jdk-21.0.2"
+cd src-tauri && cargo tauri android build --debug
+
+# Install the APK on the running emulator
+adb install -r gen/android/app/build/outputs/apk/debug/app-debug.apk
+
+# Grant notification permission (needed once after install)
+adb shell pm grant com.pomodoro.app android.permission.POST_NOTIFICATIONS
+
+# Launch
+adb shell am start -n com.pomodoro.app/.MainActivity
+```
+
+**Gradle-only rebuild** (when only Kotlin/XML changed, skip Rust compilation):
+
+```bash
+export JAVA_HOME="D:\\app-dev-tools\\jdk-21.0.2"
+export ANDROID_HOME="D:\\app-dev-tools"
+cd src-tauri/gen/android
+cmd.exe //c "gradlew.bat assembleDebug"
+```
+
 ## Testing
 
 Two test suites — run both before tagging a release:
 
 ```bash
 # 1. Rust unit tests (44 tests — state logic, date math, serialization, validation)
-cd src-tauri && cargo test
+cd src-tauri && cargo test --lib
 
 # 2. UI tests (48 tests — runs app.js in a Node.js vm sandbox with mocked
 #    DOM, Tauri API, and AudioContext; no npm install needed, Node 18+)
@@ -79,11 +111,12 @@ Pomodoro desktop clock built with Rust + Tauri v2. Vanilla HTML/CSS/JS frontend 
 
 ### Backend (`src-tauri/src/`)
 
-| File       | Role                                                                                                                                 |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `main.rs`  | Desktop entry point, hides console window in release                                                                                 |
-| `lib.rs`   | App builder: registers `tauri-plugin-store`, loads persisted settings in `setup`, manages `Mutex<PomodoroState>`, registers commands |
-| `timer.rs` | State structs, Tauri commands, background timer thread                                                                               |
+| File             | Role                                                                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `main.rs`        | Desktop entry point, hides console window in release                                                                                 |
+| `lib.rs`         | App builder: loads persisted settings in `setup`, manages `Mutex<PomodoroState>`, registers commands. Also calls `notification::init` on startup |
+| `timer.rs`       | State structs, Tauri commands, background timer thread. Calls `notification::notify_service()` at state transitions (start/stop/part-change/pause) |
+| `notification.rs`| Android JNI bridge: captures `JavaVM` via `JNI_OnLoad`, provides `notify_service()` called from `timer.rs` at state transitions, and exports `nativeStopTimer` for the notification Stop button |
 
 **State model** (`PomodoroState`): `active_session_id` (UUID string), `current_part_index`, `remaining_seconds` (i64 — negative during overtime), `settings` (PomodoroSettings), `running` flag, `paused` flag (overtime waiting for user), `overtime_tracked_seconds`, `is_docked` flag (window is in compact always-on-top mode). Wrapped in `Mutex<PomodoroState>` managed by Tauri.
 
@@ -136,6 +169,64 @@ User clicks Stop during overtime → records only the overtime seconds (full dur
 **Time recording:** A part's `track_time` flag controls whether time is recorded.
 Completed durations and overtime are written to `pomodoro_record.json` keyed by
 date → session UUID → part index. The daily total sums across all sessions/parts.
+
+### Android notification (`src-tauri/gen/android/`)
+
+While the timer is running, a persistent foreground-service notification shows the
+countdown and part name. Architecture:
+
+```
+Rust timer thread → emit tick to JS (existing)
+                  → notify_service() at transitions (start/stop/part-change/pause)
+                       → JNI → TimerForegroundService companion fields
+                            → Kotlin Handler countdown loop (wall-clock based)
+                                 → NotificationManager.notify()
+
+Stop button → PendingIntent → StopTimerReceiver → JNI (nativeStopTimer)
+                                                    → Rust stop_timer logic
+```
+
+**Rust side** (`notification.rs`):
+
+- `ServiceEvent` enum: `Start { tick }`, `PartUpdated { tick }`, `Stop`
+- `notify_service()` — called from `timer.rs` at 5 transition points. On Android calls into Kotlin via JNI; completely no-op on desktop.
+- `JNI_OnLoad` — captures `JavaVM` at library load time (reliable on Android, unlike `ndk_context` or `JNI_GetCreatedJavaVMs`).
+- `Java_com_pomodoro_app_StopTimerReceiver_nativeStopTimer` — JNI export that runs full `stop_timer` logic (state reset + record + emit + notify_service(Stop)).
+
+**Timer transition points** (`timer.rs`):
+
+| Location | Event |
+|----------|-------|
+| `start_timer` — after initial tick emit | `Start { tick }` |
+| `stop_timer` — after state reset + final tick | `Stop` |
+| `continue_timer` — after advancing state | `PartUpdated { tick }` or `Stop` |
+| Thread loop — part auto-advances | `PartUpdated { tick }` |
+| Thread loop — extendable part enters pause | `PartUpdated { tick }` |
+| Thread loop — last part finishes | `Stop` |
+
+**Kotlin side** (`gen/android/app/…/`):
+
+| File | Role |
+|------|------|
+| `TimerForegroundService.kt` | Foreground service. Countdown uses `SystemClock.elapsedRealtime()` wall-clock — immune to `Handler.postDelayed` drift. Companion `start()`/`update()`/`stop()` called from Rust via JNI. Rebuilds notification on each tick and on `update()` syncs from Rust. |
+| `StopTimerReceiver.kt` | `BroadcastReceiver` wired to notification Stop action. Calls `nativeStopTimer()` (JNI → Rust). |
+| `App.kt` | Singleton holding a global `Application` context so JNI companion methods (which have no `Context`) can start the foreground service. Initialised from `MainActivity.onCreate`. |
+| `MainActivity.kt` | `App.init(this)` before `super.onCreate()`. Requests `POST_NOTIFICATIONS` runtime permission on Android 13+. Sets up `WebViewAssetLoader` in `onWebViewCreate` so the WebView loads frontend from APK assets via `https://tauri.localhost`. |
+| `AndroidManifest.xml` | `FOREGROUND_SERVICE` + `POST_NOTIFICATIONS` permissions. `TimerForegroundService` (foregroundServiceType="dataSync") + `StopTimerReceiver` declarations. |
+
+**Countdown accuracy:** The Kotlin tick loop reads `SystemClock.elapsedRealtime()` (monotonic
+milliseconds since boot) and computes `remainingSeconds = startRemainingSeconds - elapsed`.
+On part transitions Rust calls `update()` which resets the wall-clock anchor. This keeps
+the notification within ±0.5 s of the Rust timer without per-second JNI calls.
+
+**Android builds use `cargo tauri android build --debug`** — the Tauri CLI sets up
+NDK toolchains, cross-compiles Rust, symlinks the `.so` into `jniLibs/`, and runs
+Gradle. Never manually `cargo build --target aarch64-linux-android` — the Tauri
+pipeline passes the correct NDK linker flags that a bare `cargo build` misses.
+
+**Generated files** — `.gradle/`, `assets/`, `jniLibs/`, `generated/` Kotlin, and
+`build/reports/` are excluded from git via `.gitignore`. They are regenerated on
+every build.
 
 ## Releasing
 

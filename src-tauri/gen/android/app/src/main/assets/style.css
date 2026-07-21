@@ -1,0 +1,566 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: hidden;
+}
+
+/* ---- Session switcher arrows (left/right edges) ---- */
+#session-left,
+#session-right {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.18);
+  font-size: 48px;
+  cursor: pointer;
+  padding: 24px 12px;
+  transition: color 0.25s, background 0.25s;
+  z-index: 5;
+  line-height: 1;
+}
+#session-left {
+  left: 0;
+  border-radius: 0 8px 8px 0;
+}
+#session-right {
+  right: 0;
+  border-radius: 8px 0 0 8px;
+}
+#session-left:hover,
+#session-right:hover {
+  color: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ---- Session name label ---- */
+#session-label {
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: #666;
+  margin-bottom: 8px;
+  transition: color 0.3s;
+}
+
+#controls {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+#controls > button {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 24px;
+  cursor: pointer;
+  transition: color 0.2s;
+  margin: 0 4px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+}
+
+#controls > button:hover {
+  color: #fff;
+}
+
+/* ---- Phase indicator ---- */
+#phase {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  padding: 6px 20px;
+  border-radius: 20px;
+  margin-bottom: 24px;
+  transition: background 0.3s, color 0.3s;
+}
+/* Part colour by index (wraps via modulo in JS) */
+.phase-part-0 {
+  background: rgba(233, 69, 96, 0.2);
+  color: #e94560;
+}
+.phase-part-1 {
+  background: rgba(22, 199, 154, 0.2);
+  color: #16c79a;
+}
+.phase-part-2 {
+  background: rgba(100, 149, 237, 0.2);
+  color: #6495ed;
+}
+.phase-part-3 {
+  background: rgba(255, 193, 7, 0.2);
+  color: #ffc107;
+}
+.phase-part-4 {
+  background: rgba(180, 130, 255, 0.2);
+  color: #b482ff;
+}
+
+/* ---- Timer ---- */
+#timer {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 6rem;
+  font-weight: 700;
+  color: #f0f0f0;
+  margin-bottom: 40px;
+  letter-spacing: 4px;
+}
+
+/* ---- Daily total ---- */
+#daily-total {
+  font-size: 0.95rem;
+  color: #888;
+  margin-bottom: 24px;
+}
+
+/* ---- Toggle button ---- */
+#toggle-btn {
+  font-size: 1.2rem;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 14px 52px;
+  border: none;
+  border-radius: 40px;
+  cursor: pointer;
+  background: #e94560;
+  color: #fff;
+  transition: background 0.2s, transform 0.1s;
+}
+#toggle-btn:hover {
+  background: #d13652;
+}
+#toggle-btn:active {
+  transform: scale(0.96);
+}
+#toggle-btn.is-running {
+  background: #555;
+}
+#toggle-btn.is-running:hover {
+  background: #777;
+}
+
+/* ---- Continue button (overtime) ---- */
+#continue-btn {
+  font-size: 1.1rem;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 12px 44px;
+  border: 2px solid #16c79a;
+  border-radius: 40px;
+  cursor: pointer;
+  background: transparent;
+  color: #16c79a;
+  margin-top: 12px;
+  transition: background 0.2s, color 0.2s;
+}
+#continue-btn:hover {
+  background: #16c79a;
+  color: #1a1a2e;
+}
+#continue-btn.hidden {
+  display: none;
+}
+
+/* ---- Overtime timer ---- */
+#timer.overtime {
+  color: #e94560;
+}
+
+/* ---- Settings overlay ---- */
+#settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+#settings-overlay.hidden {
+  display: none;
+}
+
+#settings-panel {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 12px;
+  padding: 24px 28px;
+  min-width: 380px;
+  max-width: 440px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+#settings-panel h2 {
+  font-size: 1.3rem;
+  text-align: center;
+  color: #fff;
+  margin-bottom: 0;
+}
+
+/* ---- Session cards in settings ---- */
+.session-card {
+  background: #1a1a2e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.session-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.session-header input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  background: #16213e;
+  color: #e0e0e0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+.btn-delete-session {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 2px 8px;
+  transition: color 0.2s;
+}
+.btn-delete-session:hover {
+  color: #e94560;
+}
+
+/* ---- Part rows ---- */
+.parts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.part-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.part-name-col {
+  flex: 1;
+  min-width: 0;
+}
+.part-name-col input[type="text"] {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  background: #16213e;
+  color: #e0e0e0;
+  font-size: 0.85rem;
+  box-sizing: border-box;
+}
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 3px;
+}
+.part-row input[type="number"] {
+  width: 56px;
+  padding: 5px 6px;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  background: #16213e;
+  color: #e0e0e0;
+  font-size: 0.85rem;
+  text-align: center;
+}
+.btn-delete-part {
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 2px 6px;
+  transition: color 0.2s;
+}
+.btn-delete-part:hover {
+  color: #e94560;
+}
+.extendable-label {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.7rem;
+  color: #888;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.extendable-label input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  accent-color: #16c79a;
+  cursor: pointer;
+  margin: 0;
+}
+.btn-add-part {
+  background: none;
+  border: 1px dashed #0f3460;
+  border-radius: 4px;
+  color: #888;
+  font-size: 0.8rem;
+  padding: 5px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+.btn-add-part:hover {
+  color: #ccc;
+  border-color: #444;
+}
+
+/* ---- Add session button ---- */
+.btn-add {
+  background: none;
+  border: 1px dashed #0f3460;
+  border-radius: 8px;
+  color: #888;
+  font-size: 0.9rem;
+  padding: 10px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+.btn-add:hover {
+  color: #ccc;
+  border-color: #444;
+}
+
+/* ---- Settings actions ---- */
+.settings-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+.settings-actions button {
+  padding: 10px 24px;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+#save-settings {
+  background: #e94560;
+  color: #fff;
+}
+#save-settings:hover {
+  background: #d13652;
+}
+.btn-secondary {
+  background: #333;
+  color: #ccc;
+}
+.btn-secondary:hover {
+  background: #444;
+}
+
+/* ---- Dock mode (compact, always-on-top top bar) ---- */
+body.docked {
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  height: 100vh;
+}
+
+body.docked #session-label {
+  display: none;
+}
+
+body.docked #phase {
+  font-size: 1rem;
+  letter-spacing: 2px;
+  padding: 3px 12px;
+  margin-bottom: 0;
+  border-radius: 12px;
+}
+
+body.docked #timer {
+  font-size: 2.4rem;
+  margin-bottom: 0;
+  letter-spacing: 2px;
+  order: -1;
+}
+
+body.docked #dock-btn {
+  position: static;
+  width: auto;
+  height: auto;
+  font-size: 22px;
+  padding: 2px 6px;
+  color: #888;
+  order: 10;
+}
+body.docked #dock-btn:hover {
+  color: #e94560;
+}
+
+body.docked #controls {
+  position: static;
+  top: auto;
+  right: auto;
+  gap: 6px;
+  order: 11;
+}
+
+/* Hide most controls in dock mode */
+body.docked #session-left,
+body.docked #session-right,
+body.docked #settings-btn,
+body.docked #toggle-btn,
+body.docked #continue-btn,
+body.docked #daily-total {
+  display: none;
+}
+
+/* Hide settings overlay in dock mode (would overflow the tiny window) */
+body.docked #settings-overlay {
+  display: none !important;
+}
+
+/* ---- Mobile: portrait phones (max-width 600px) ---- */
+@media (max-width: 600px) {
+  body {
+    justify-content: flex-start;
+    padding-top: 10vh;
+  }
+
+  #session-left,
+  #session-right {
+    top: 18%;
+    font-size: 32px;
+    padding: 12px 6px;
+  }
+
+  #controls {
+    top: 10px;
+    right: 10px;
+  }
+
+  #controls > button {
+    font-size: 20px;
+    width: 32px;
+    height: 32px;
+  }
+
+  /* Hide dock button on mobile — no window management */
+  #dock-btn {
+    display: none;
+  }
+
+  #phase {
+    font-size: 0.85rem;
+    padding: 4px 14px;
+    margin-bottom: 16px;
+  }
+
+  #timer {
+    font-size: 13vw;            /* scales with screen width */
+    margin-bottom: 24px;
+  }
+
+  #session-label {
+    font-size: 1rem;
+    margin-bottom: 4px;
+  }
+
+  #toggle-btn {
+    font-size: 1.1rem;
+    padding: 14px 50px;
+    border-radius: 32px;
+  }
+
+  #continue-btn {
+    font-size: 1rem;
+    padding: 12px 36px;
+  }
+
+  #daily-total {
+    font-size: 0.9rem;
+  }
+
+  #settings-panel {
+    min-width: 0;
+    max-width: 92vw;
+    max-height: 85vh;
+    padding: 18px 14px;
+  }
+
+  #settings-panel h2 {
+    font-size: 1.2rem;
+    margin-bottom: 14px;
+  }
+
+  /* Larger tap targets in settings form */
+  .session-header input,
+  .part-name-col input[type="text"],
+  .part-row input[type="number"] {
+    padding: 8px 10px;
+    font-size: 0.9rem;
+  }
+
+  .extendable-label {
+    font-size: 0.75rem;
+    gap: 4px;
+  }
+
+  .extendable-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+  }
+
+  .btn-add-part,
+  .btn-add {
+    padding: 8px;
+    font-size: 0.85rem;
+  }
+
+  .settings-actions button {
+    padding: 10px 24px;
+    font-size: 0.95rem;
+  }
+}

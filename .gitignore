@@ -7,5 +7,11 @@ target/
 # Generated schemas (rebuilt by tauri-build)
 src-tauri/gen/schemas/
 
+# Android build artifacts (large binaries)
+src-tauri/gen/android/build/
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/app/build/
+src-tauri/gen/android/local.properties
+
 # Release artifacts
 *.zip

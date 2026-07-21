@@ -409,10 +409,25 @@ settingsBtn.addEventListener('click', () => {
   overlay._editSessions = editSessions;
 
   overlay.classList.remove('hidden');
+  // Push dummy history entry so Android back button closes overlay
+  // instead of exiting the app.
+  window.history.pushState({ overlayOpen: true }, '');
+});
+
+// Android back button: close settings overlay instead of exiting app
+window.addEventListener('popstate', (e) => {
+  if (!overlay.classList.contains('hidden')) {
+    overlay.classList.add('hidden');
+    e.preventDefault();
+  }
 });
 
 cancelBtn.addEventListener('click', () => {
   overlay.classList.add('hidden');
+  // Remove the dummy history entry when closing via Cancel.
+  if (window.history.state && window.history.state.overlayOpen) {
+    window.history.back();
+  }
 });
 
 addSessionBtn.addEventListener('click', () => {

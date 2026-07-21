@@ -214,6 +214,12 @@ function loadAppJs() {
   const mockWindow = {
     __TAURI__: mockTauri,
     AudioContext: MockAudioContext,
+    addEventListener() {},
+    history: {
+      pushState() {},
+      back() {},
+      state: null,
+    },
   };
 
   // ---- Sandbox ----

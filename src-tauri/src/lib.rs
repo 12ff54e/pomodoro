@@ -1,4 +1,4 @@
-use tauri::Manager;
+use tauri::{Emitter, Manager, RunEvent};
 
 mod timer;
 
@@ -6,6 +6,20 @@ mod timer;
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            // Resolve platform-appropriate data directory.
+            // On Android this is the app's internal data dir; on desktop
+            // it falls back to the exe-adjacent directory (backward compat).
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| {
+                    std::env::current_exe()
+                        .ok()
+                        .and_then(|e| e.parent().map(|p| p.to_path_buf()))
+                        .unwrap_or_else(|| std::path::PathBuf::from("."))
+                });
+            timer::init_data_dir(data_dir);
+
             let (settings, active_id) = timer::load_settings();
             let test_mode = std::env::var("POMODORO_TEST_MODE")
                 .map(|v| v == "1")
@@ -43,6 +57,18 @@ pub fn run() {
             timer::toggle_dock_mode,
             timer::get_dock_state,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let RunEvent::Resumed = event {
+                // After Android suspend/resume, emit a fresh state tick
+                // so the frontend re-syncs its display.
+                let tick = {
+                    let state = app_handle.state::<std::sync::Mutex<timer::PomodoroState>>();
+                    let s = state.lock().unwrap();
+                    timer::build_tick(&s, timer::load_daily_total())
+                };
+                let _ = app_handle.emit("timer-tick", &tick);
+            }
+        });
 }

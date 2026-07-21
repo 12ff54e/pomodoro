@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Pomodoro</string>
+    <string name="timer_channel_name">Pomodoro Timer</string>
+    <string name="timer_channel_desc">Shows countdown while the timer is running</string>
 </resources>

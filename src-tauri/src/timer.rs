@@ -5,6 +5,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::notification;
+use crate::notification::ServiceEvent;
+
 // ---------------------------------------------------------------------------
 // Data model
 // ---------------------------------------------------------------------------
@@ -353,7 +356,7 @@ pub fn minutes_to_seconds(minutes: u64, test_mode: bool) -> i64 {
 }
 
 /// Find a session's array index by its UUID. Returns `None` if not found.
-fn find_session_index(sessions: &[Session], id: &str) -> Option<usize> {
+pub fn find_session_index(sessions: &[Session], id: &str) -> Option<usize> {
     sessions.iter().position(|s| s.id == id)
 }
 
@@ -449,7 +452,7 @@ pub fn load_daily_total() -> u64 {
 
 /// Records `seconds` of tracked time for a specific session/part on today's
 /// date. Returns the new daily total.
-fn add_record_seconds(session_id: &str, part_index: usize, seconds: u64) -> u64 {
+pub fn add_record_seconds(session_id: &str, part_index: usize, seconds: u64) -> u64 {
     let mut record = load_record();
     let today = today_string();
     let day_entry = record.entry(today).or_default();
@@ -523,7 +526,7 @@ fn validate_sessions(sessions: &[Session]) -> Result<(), String> {
 /// Calculate tracked seconds to record when stopping a running timer.
 /// Returns `None` if the part does not have track_time enabled or no time
 /// has elapsed.
-fn stop_tracked_seconds(
+pub fn stop_tracked_seconds(
     track_time: bool,
     part_full_seconds: u64,
     paused: bool,
@@ -633,6 +636,10 @@ pub fn start_timer(
     drop(s);
     let _ = app.emit("timer-tick", &tick);
 
+    notification::notify_service(&app, ServiceEvent::Start {
+        tick: tick.clone(),
+    });
+
     std::thread::spawn(move || {
         // Snapshot part metadata from the session at start time.
         let _part_names: Vec<String> = sessions[active_idx]
@@ -644,6 +651,11 @@ pub fn start_timer(
         let part_track_time: Vec<bool> = sessions[active_idx]
             .parts.iter().map(|p| p.track_time).collect();
         let session_id = active_id;
+
+        // Track previous state to detect transitions for the Android
+        // notification service (otherwise skipped on desktop).
+        let mut prev_part_index: usize = 0;
+        let mut prev_paused: bool = false;
 
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -729,10 +741,20 @@ pub fn start_timer(
             };
             let _ = app.emit("timer-tick", &tick);
 
-            // If the session ended on its own, exit the loop.
+            // Notify Android notification service on state transitions.
             if phase_ended {
+                notification::notify_service(&app, ServiceEvent::Stop);
                 break;
+            } else if tick.part_index != prev_part_index || tick.paused != prev_paused {
+                notification::notify_service(
+                    &app,
+                    ServiceEvent::PartUpdated {
+                        tick: tick.clone(),
+                    },
+                );
             }
+            prev_part_index = tick.part_index;
+            prev_paused = tick.paused;
         }
     });
 
@@ -784,6 +806,7 @@ pub fn stop_timer(
     drop(s);
 
     let _ = app.emit("timer-tick", &tick);
+    notification::notify_service(&app, ServiceEvent::Stop);
     Ok(())
 }
 
@@ -825,6 +848,19 @@ pub fn continue_timer(
     }
 
     let _ = app.emit("timer-tick", &tick);
+
+    // Notify Android notification service — advance to next part (or stop).
+    if tick.running {
+        notification::notify_service(
+            &app,
+            ServiceEvent::PartUpdated {
+                tick: tick.clone(),
+            },
+        );
+    } else {
+        notification::notify_service(&app, ServiceEvent::Stop);
+    }
+
     Ok(())
 }
 

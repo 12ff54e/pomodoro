@@ -1,5 +1,6 @@
 use tauri::{Emitter, Manager, RunEvent};
 
+mod notification;
 mod timer;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -19,6 +20,7 @@ pub fn run() {
                         .unwrap_or_else(|| std::path::PathBuf::from("."))
                 });
             timer::init_data_dir(data_dir);
+            notification::init(app.handle().clone());
 
             let (settings, active_id) = timer::load_settings();
             let test_mode = std::env::var("POMODORO_TEST_MODE")

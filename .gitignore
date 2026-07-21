@@ -13,5 +13,13 @@ src-tauri/gen/android/.gradle/
 src-tauri/gen/android/app/build/
 src-tauri/gen/android/local.properties
 
+# Android: generated during build (copied from ui/, rebuilt by Tauri plugin)
+src-tauri/gen/android/app/src/main/assets/
+src-tauri/gen/android/app/src/main/jniLibs/
+src-tauri/gen/android/app/src/main/java/com/pomodoro/app/generated/
+
+# Build reports
+src-tauri/gen/android/build/reports/
+
 # Release artifacts
 *.zip

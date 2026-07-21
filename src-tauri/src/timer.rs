@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -97,21 +97,38 @@ pub struct PomodoroState {
 // Persistence (JSON file next to the executable)
 // ---------------------------------------------------------------------------
 
-fn exe_dir() -> PathBuf {
-    let exe = std::env::current_exe().unwrap_or_default();
-    exe.parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .to_path_buf()
+/// Platform-appropriate data directory, set once by `init_data_dir()` at startup.
+/// Falls back to the exe-adjacent directory (desktop backward compat) if not
+/// yet initialised.
+static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+fn data_dir() -> &'static PathBuf {
+    DATA_DIR.get().unwrap_or_else(|| {
+        static FALLBACK: OnceLock<PathBuf> = OnceLock::new();
+        FALLBACK.get_or_init(|| {
+            let exe = std::env::current_exe().unwrap_or_default();
+            exe.parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf()
+        })
+    })
 }
 
-/// `<exe-dir>/pomodoro.json` — small, fast to load.
+/// Called once from `setup()` to set the platform-appropriate data directory.
+/// On Android this is the app's private data dir; on desktop it is exe-adjacent.
+pub fn init_data_dir(path: PathBuf) {
+    let _ = std::fs::create_dir_all(&path);
+    DATA_DIR.set(path).ok(); // ok(): silently ignore if already set
+}
+
+/// `<data-dir>/pomodoro.json` — small, fast to load.
 fn settings_path() -> PathBuf {
-    exe_dir().join("pomodoro.json")
+    data_dir().join("pomodoro.json")
 }
 
-/// `<exe-dir>/pomodoro_record.json` — detailed per-session/per-part log.
+/// `<data-dir>/pomodoro_record.json` — detailed per-session/per-part log.
 fn record_path() -> PathBuf {
-    exe_dir().join("pomodoro_record.json")
+    data_dir().join("pomodoro_record.json")
 }
 
 // ---- Settings file ----
@@ -452,7 +469,7 @@ fn add_record_seconds(session_id: &str, part_index: usize, seconds: u64) -> u64 
 }
 
 /// Build a TimerTick from the current state.
-fn build_tick(state: &PomodoroState, daily_total: u64) -> TimerTick {
+pub fn build_tick(state: &PomodoroState, daily_total: u64) -> TimerTick {
     let idx = find_session_index(&state.settings.sessions, &state.active_session_id)
         .unwrap_or(0);
     let session = &state.settings.sessions[idx];
@@ -909,70 +926,89 @@ pub fn toggle_dock_mode(
     app: AppHandle,
     state: State<'_, Mutex<PomodoroState>>,
 ) -> Result<bool, String> {
-    let currently_docked = {
-        let s = state.lock().unwrap();
-        s.is_docked
-    };
-    let docked = !currently_docked;
+    #[cfg(desktop)]
+    {
+        let currently_docked = {
+            let s = state.lock().unwrap();
+            s.is_docked
+        };
+        let docked = !currently_docked;
 
-    let window = app
-        .get_webview_window("main")
-        .ok_or("No main window found")?;
+        let window = app
+            .get_webview_window("main")
+            .ok_or("No main window found")?;
 
-    if docked {
-        window
-            .set_decorations(false)
-            .map_err(|e| e.to_string())?;
-        window
-            .set_always_on_top(true)
-            .map_err(|e| e.to_string())?;
-        window
-            .set_resizable(true)
-            .map_err(|e| e.to_string())?;
-        window
-            .set_size(tauri::Size::Logical(tauri::LogicalSize::new(360.0, 72.0)))
-            .map_err(|e| e.to_string())?;
-
-        // Position at top-center of the primary monitor.
-        if let Ok(Some(monitor)) = window.primary_monitor() {
-            let phys = monitor.size();
-            let scale = monitor.scale_factor();
-            let logical_width = phys.width as f64 / scale;
-            let x = ((logical_width - 360.0) / 2.0).max(0.0);
+        if docked {
             window
-                .set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
-                    x, 0.0,
-                )))
+                .set_decorations(false)
+                .map_err(|e| e.to_string())?;
+            window
+                .set_always_on_top(true)
+                .map_err(|e| e.to_string())?;
+            window
+                .set_resizable(true)
+                .map_err(|e| e.to_string())?;
+            window
+                .set_size(tauri::Size::Logical(tauri::LogicalSize::new(360.0, 72.0)))
+                .map_err(|e| e.to_string())?;
+
+            // Position at top-center of the primary monitor.
+            if let Ok(Some(monitor)) = window.primary_monitor() {
+                let phys = monitor.size();
+                let scale = monitor.scale_factor();
+                let logical_width = phys.width as f64 / scale;
+                let x = ((logical_width - 360.0) / 2.0).max(0.0);
+                window
+                    .set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
+                        x, 0.0,
+                    )))
+                    .map_err(|e| e.to_string())?;
+            }
+        } else {
+            window
+                .set_decorations(true)
+                .map_err(|e| e.to_string())?;
+            window
+                .set_always_on_top(false)
+                .map_err(|e| e.to_string())?;
+            window
+                .set_size(tauri::Size::Logical(tauri::LogicalSize::new(420.0, 520.0)))
+                .map_err(|e| e.to_string())?;
+            window.center().map_err(|e| e.to_string())?;
+            window
+                .set_resizable(false)
                 .map_err(|e| e.to_string())?;
         }
-    } else {
-        window
-            .set_decorations(true)
-            .map_err(|e| e.to_string())?;
-        window
-            .set_always_on_top(false)
-            .map_err(|e| e.to_string())?;
-        window
-            .set_size(tauri::Size::Logical(tauri::LogicalSize::new(420.0, 520.0)))
-            .map_err(|e| e.to_string())?;
-        window.center().map_err(|e| e.to_string())?;
-        window
-            .set_resizable(false)
-            .map_err(|e| e.to_string())?;
+
+        // Only mutate state after all window ops succeed.
+        {
+            let mut s = state.lock().unwrap();
+            s.is_docked = docked;
+        }
+
+        let _ = app.emit(
+            "dock-mode-changed",
+            serde_json::json!({ "docked": docked }),
+        );
+
+        Ok(docked)
     }
 
-    // Only mutate state after all window ops succeed.
+    #[cfg(mobile)]
     {
-        let mut s = state.lock().unwrap();
-        s.is_docked = docked;
+        // Dock mode has no window-level meaning on mobile —
+        // just toggle the state flag so the frontend stays consistent.
+        let docked = {
+            let mut s = state.lock().unwrap();
+            s.is_docked = !s.is_docked;
+            s.is_docked
+        };
+        let _ = app.emit(
+            "dock-mode-changed",
+            serde_json::json!({ "docked": docked }),
+        );
+        Ok(docked)
     }
-
-    let _ = app.emit(
-        "dock-mode-changed",
-        serde_json::json!({ "docked": docked }),
-    );
-
-    Ok(docked)
 }
 
 #[tauri::command]

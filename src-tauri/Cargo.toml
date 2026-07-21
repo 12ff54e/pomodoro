@@ -34,3 +34,6 @@ lto = true            # link-time optimization
 codegen-units = 1     # single codegen unit for best LTO
 strip = "symbols"     # strip debug symbols
 panic = "abort"       # remove unwind machinery
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"

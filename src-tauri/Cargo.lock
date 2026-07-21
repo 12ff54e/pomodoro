@@ -2178,6 +2178,7 @@ dependencies = [
 name = "pomodoro"
 version = "0.6.0"
 dependencies = [
+ "jni",
  "serde",
  "serde_json",
  "tauri",

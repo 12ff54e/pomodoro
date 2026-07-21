@@ -5,7 +5,7 @@ src-tauri/target/
 target/
 
 # Generated schemas (rebuilt by tauri-build)
-src-tauri/gen/
+src-tauri/gen/schemas/
 
 # Release artifacts
 *.zip

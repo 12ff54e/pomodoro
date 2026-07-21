@@ -461,3 +461,106 @@ body.docked #daily-total {
 body.docked #settings-overlay {
   display: none !important;
 }
+
+/* ---- Mobile: portrait phones (max-width 600px) ---- */
+@media (max-width: 600px) {
+  body {
+    justify-content: flex-start;
+    padding-top: 10vh;
+  }
+
+  #session-left,
+  #session-right {
+    top: 18%;
+    font-size: 32px;
+    padding: 12px 6px;
+  }
+
+  #controls {
+    top: 10px;
+    right: 10px;
+  }
+
+  #controls > button {
+    font-size: 20px;
+    width: 32px;
+    height: 32px;
+  }
+
+  /* Hide dock button on mobile — no window management */
+  #dock-btn {
+    display: none;
+  }
+
+  #phase {
+    font-size: 0.85rem;
+    padding: 4px 14px;
+    margin-bottom: 16px;
+  }
+
+  #timer {
+    font-size: 13vw;            /* scales with screen width */
+    margin-bottom: 24px;
+  }
+
+  #session-label {
+    font-size: 1rem;
+    margin-bottom: 4px;
+  }
+
+  #toggle-btn {
+    font-size: 1.1rem;
+    padding: 14px 50px;
+    border-radius: 32px;
+  }
+
+  #continue-btn {
+    font-size: 1rem;
+    padding: 12px 36px;
+  }
+
+  #daily-total {
+    font-size: 0.9rem;
+  }
+
+  #settings-panel {
+    min-width: 0;
+    max-width: 92vw;
+    max-height: 85vh;
+    padding: 18px 14px;
+  }
+
+  #settings-panel h2 {
+    font-size: 1.2rem;
+    margin-bottom: 14px;
+  }
+
+  /* Larger tap targets in settings form */
+  .session-header input,
+  .part-name-col input[type="text"],
+  .part-row input[type="number"] {
+    padding: 8px 10px;
+    font-size: 0.9rem;
+  }
+
+  .extendable-label {
+    font-size: 0.75rem;
+    gap: 4px;
+  }
+
+  .extendable-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+  }
+
+  .btn-add-part,
+  .btn-add {
+    padding: 8px;
+    font-size: 0.85rem;
+  }
+
+  .settings-actions button {
+    padding: 10px 24px;
+    font-size: 0.95rem;
+  }
+}

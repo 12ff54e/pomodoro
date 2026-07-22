@@ -140,6 +140,23 @@ date → session UUID → part index. The daily total sums across all sessions/p
 
 ## Releasing
 
+### Automated (recommended)
+
+```bash
+# Bump patch version (0.6.0 → 0.6.1), update Cargo.lock, commit, tag, and push
+./tag-release.sh --patch --push
+
+# Or bump minor (0.6.0 → 0.7.0) or major (0.6.0 → 1.0.0)
+./tag-release.sh --minor --push
+./tag-release.sh --major --push
+```
+
+The script updates `src-tauri/Cargo.toml`, runs `cargo check` to regenerate
+`Cargo.lock`, commits both files, creates an annotated `v<version>` tag, and
+optionally pushes both the commit and tag.
+
+### Manual
+
 ```bash
 # 1. Bump version in src-tauri/Cargo.toml (e.g., version = "0.3.1")
 # 2. Rebuild to update Cargo.lock with the new version
@@ -155,9 +172,15 @@ git push
 ./tag-release.sh --push
 ```
 
-The `tag-release.sh` script reads the version from `src-tauri/Cargo.toml` and creates an annotated `v<version>` tag. Pushing the tag triggers `.github/workflows/release.yml` which builds and packages the release.
+The `tag-release.sh` script reads the version from `src-tauri/Cargo.toml` and
+creates an annotated `v<version>` tag. When used with `--patch`/`--minor`/`--major`,
+it also bumps the version, updates `Cargo.lock`, and commits before tagging.
+Pushing the tag triggers `.github/workflows/release.yml` which builds and
+packages the release.
 
-**Important:** After changing the version in `Cargo.toml`, always rebuild so that `Cargo.lock` reflects the new version — otherwise the lockfile will be out of sync.
+**Important:** After changing the version in `Cargo.toml`, always rebuild so
+that `Cargo.lock` reflects the new version — otherwise the lockfile will be
+out of sync. The automated path handles this via `cargo check`.
 
 ## Toolchain quirk
 

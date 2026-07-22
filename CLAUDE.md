@@ -30,12 +30,13 @@ Two test suites — run both before tagging a release:
 # 1. Rust unit tests (44 tests — state logic, date math, serialization, validation)
 cd src-tauri && cargo test
 
-# 2. UI tests (48 tests — runs app.js in a Node.js vm sandbox with mocked
-#    DOM, Tauri API, and AudioContext; no npm install needed, Node 18+)
+# 2. UI tests (59 tests — runs app.js in a Node.js vm sandbox with mocked
+#    DOM, Tauri API, AudioContext, and navigator.clipboard; no npm install
+#    needed, Node 18+)
 node ui/test/test.js
 ```
 
-**What the UI tests cover:** `formatTime` / `formatDailyTotal` / `phaseClass` (pure functions), `render` (DOM updates for running/paused/overtime/docked states), `buildSettingsForm` (form generation and two-way data binding), client-side settings validation, session-switcher wrap-around logic, keyboard-shortcut guards, and event-listener registration for `timer-tick` and `dock-mode-changed`.
+**What the UI tests cover:** `formatTime` / `formatDailyTotal` / `phaseClass` (pure functions), `render` (DOM updates for running/paused/overtime/docked states), `buildSettingsForm` (form generation and two-way data binding), client-side settings validation, session-switcher wrap-around logic, keyboard-shortcut guards, event-listener registration for `timer-tick` and `dock-mode-changed`, and export/import settings to/from clipboard (JSON serialization, validation, error handling).
 
 **What they don't cover:** No actual Tauri IPC — `invoke()` calls are stubbed. No browser rendering or CSS layout. Timer-thread behavior, file I/O, and window management are tested only by the Rust unit tests.
 
@@ -108,9 +109,9 @@ Pomodoro desktop clock built with Rust + Tauri v2. Vanilla HTML/CSS/JS frontend 
 
 ### Frontend (`ui/`)
 
-- `index.html` — timer display (`#timer`), phase indicator (`#phase`), session label (`#session-label`), dock button (`#dock-btn`), settings button (`#settings-btn`) both wrapped in `#controls` container, toggle button (`#toggle-btn`), continue button (`#continue-btn`, shown during overtime), session switcher arrows, settings panel overlay
-- `style.css` — dark theme (`#1a1a2e` bg), centered flexbox, `.phase-part-0` through `.phase-part-4` (5-colour index-based palette wrapping via modulo), `.overtime` turns timer red, Continue button (teal outline → solid on hover). `body.docked` class switches to compact horizontal layout (72px tall bar, larger fonts, most controls hidden). Settings form: `.part-name-col` stacks name input above `.checkbox-row` (Ext + Track toggles).
-- `app.js` — uses `window.__TAURI__` (global Tauri API, enabled via `withGlobalTauri: true`). Calls `invoke()` for commands, `listen('timer-tick', ...)` and `listen('dock-mode-changed', ...)` for state updates. Tracks `activeSessionId`/`sessionIds` (ordered UUID list for prev/next navigation), `currentPartIndex`/`currentPartName`/`currentSessionName`/`isRunning`/`isPaused`/`isDocked` locally. `formatTime` handles negative seconds (overtime). `phaseClass(partIndex)` — index-based with 5-colour modulo. Beeps on session start (long), part transitions (triple), session end (long), and overtime entry (triple). Dynamic settings form builds session/part cards with extendable + track-time checkboxes under the part name input. `setDocked()` toggles the `.docked` CSS class and button icon.
+- `index.html` — timer display (`#timer`), phase indicator (`#phase`), session label (`#session-label`), dock button (`#dock-btn`), settings button (`#settings-btn`) both wrapped in `#controls` container, toggle button (`#toggle-btn`), continue button (`#continue-btn`, shown during overtime), session switcher arrows, settings panel overlay with Export/Import buttons alongside Save/Cancel
+- `style.css` — dark theme (`#1a1a2e` bg), centered flexbox, `.phase-part-0` through `.phase-part-4` (5-colour index-based palette wrapping via modulo), `.overtime` turns timer red, Continue button (teal outline → solid on hover). `body.docked` class switches to compact horizontal layout (72px tall bar, larger fonts, most controls hidden). Settings form: `.part-name-col` stacks name input above `.checkbox-row` (Ext + Track toggles). `.btn-flash` provides teal feedback on Export/Import success.
+- `app.js` — uses `window.__TAURI__` (global Tauri API, enabled via `withGlobalTauri: true`). Calls `invoke()` for commands, `listen('timer-tick', ...)` and `listen('dock-mode-changed', ...)` for state updates. Tracks `activeSessionId`/`sessionIds` (ordered UUID list for prev/next navigation), `currentPartIndex`/`currentPartName`/`currentSessionName`/`isRunning`/`isPaused`/`isDocked` locally. `formatTime` handles negative seconds (overtime). `phaseClass(partIndex)` — index-based with 5-colour modulo. Beeps on session start (long), part transitions (triple), session end (long), and overtime entry (triple). Dynamic settings form builds session/part cards with extendable + track-time checkboxes under the part name input. `setDocked()` toggles the `.docked` CSS class and button icon. **Export:** serializes settings to JSON via `get_settings` and copies to clipboard with `navigator.clipboard.writeText()`. **Import:** reads JSON from clipboard via `navigator.clipboard.readText()`, validates client-side (accepts `{sessions: [...]}` wrapper or raw array; checks session names and part minutes 1–120), then applies via `update_settings`.
 
 ### Data flow
 

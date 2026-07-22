@@ -53,6 +53,8 @@ const settingsBtn = document.getElementById('settings-btn');
 const overlay = document.getElementById('settings-overlay');
 const sessionsContainer = document.getElementById('sessions-container');
 const addSessionBtn = document.getElementById('add-session-btn');
+const exportBtn = document.getElementById('export-settings');
+const importBtn = document.getElementById('import-settings');
 const saveBtn = document.getElementById('save-settings');
 const cancelBtn = document.getElementById('cancel-settings');
 const dailyTotalEl = document.getElementById('daily-total');
@@ -448,6 +450,101 @@ saveBtn.addEventListener('click', async () => {
   } catch (e) {
     console.error('update_settings failed:', e);
     alert('Failed to save: ' + e);
+  }
+});
+
+// ---- Export settings to clipboard ----
+exportBtn.addEventListener('click', async () => {
+  try {
+    const settings = await invoke('get_settings');
+    const json = JSON.stringify(settings, null, 2);
+    await navigator.clipboard.writeText(json);
+    const orig = exportBtn.textContent;
+    exportBtn.textContent = 'Copied!';
+    exportBtn.classList.add('btn-flash');
+    setTimeout(() => {
+      exportBtn.textContent = orig;
+      exportBtn.classList.remove('btn-flash');
+    }, 1500);
+  } catch (e) {
+    console.error('export failed:', e);
+    alert('Failed to copy settings: ' + e);
+  }
+});
+
+// ---- Import settings from clipboard ----
+importBtn.addEventListener('click', async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (!text.trim()) {
+      alert('Clipboard is empty.');
+      return;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      alert('Clipboard does not contain valid JSON.');
+      return;
+    }
+    // Accept either { sessions: [...] } or the raw sessions array.
+    let sessions;
+    if (Array.isArray(parsed)) {
+      sessions = parsed;
+    } else if (parsed.sessions && Array.isArray(parsed.sessions)) {
+      sessions = parsed.sessions;
+    } else {
+      alert('Clipboard JSON must have a "sessions" array.');
+      return;
+    }
+    // Basic shape check: each session needs name + parts.
+    for (const s of sessions) {
+      if (!s.name || typeof s.name !== 'string') {
+        alert('Each session must have a string "name".');
+        return;
+      }
+      if (!Array.isArray(s.parts) || s.parts.length === 0) {
+        alert('Session "' + s.name + '" must have a non-empty "parts" array.');
+        return;
+      }
+      for (const p of s.parts) {
+        if (typeof p.minutes !== 'number' || p.minutes < 1 || p.minutes > 120) {
+          alert('Each part in "' + s.name + '" must have "minutes" between 1 and 120.');
+          return;
+        }
+      }
+    }
+
+    const newSettings = await invoke('update_settings', { sessions });
+    sessions = newSettings.sessions;
+    sessionIds = newSettings.sessions.map(s => s.id);
+
+    // Refresh the form if the settings panel is still open.
+    const edit = overlay._editSessions;
+    if (edit) {
+      const imported = newSettings.sessions.map(s => ({
+        id: s.id,
+        name: s.name,
+        parts: s.parts.map(p => ({
+          name: p.name, minutes: p.minutes,
+          extendable: p.extendable || false,
+          track_time: p.track_time || false,
+        })),
+      }));
+      overlay._editSessions = imported;
+      buildSettingsForm(imported);
+    }
+
+    const orig = importBtn.textContent;
+    importBtn.textContent = 'Imported!';
+    importBtn.classList.add('btn-flash');
+    setTimeout(() => {
+      importBtn.textContent = orig;
+      importBtn.classList.remove('btn-flash');
+    }, 1500);
+  } catch (e) {
+    console.error('import failed:', e);
+    alert('Failed to import settings: ' + e);
   }
 });
 

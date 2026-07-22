@@ -213,7 +213,7 @@ body {
   background: #16213e;
   border: 1px solid #0f3460;
   border-radius: 12px;
-  padding: 24px 28px;
+  padding: 24px 14px;
   min-width: 380px;
   max-width: 440px;
   max-height: 80vh;
@@ -374,7 +374,8 @@ body {
   justify-content: flex-end;
 }
 .settings-actions button {
-  padding: 10px 24px;
+  padding: 10px 0px;
+  min-width: 80px;
   border: none;
   border-radius: 6px;
   font-size: 0.95rem;
@@ -395,6 +396,13 @@ body {
 }
 .btn-secondary:hover {
   background: #444;
+}
+
+/* Flash feedback for Export / Import buttons */
+.btn-flash {
+  background: #16c79a !important;
+  color: #1a1a2e !important;
+  transition: background 0.2s, color 0.2s;
 }
 
 /* ---- Dock mode (compact, always-on-top top bar) ---- */

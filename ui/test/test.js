@@ -20,7 +20,8 @@ const ALL_IDS = [
   'timer', 'phase', 'session-label', 'dock-btn',
   'toggle-btn', 'continue-btn', 'session-left', 'session-right',
   'settings-btn', 'settings-overlay', 'sessions-container',
-  'add-session-btn', 'save-settings', 'cancel-settings',
+  'add-session-btn', 'export-settings', 'import-settings',
+  'save-settings', 'cancel-settings',
   'daily-total', 'body-el',
 ];
 
@@ -50,7 +51,9 @@ function el(id, tag) {
       listeners[ev].push(fn);
     },
     _fire(ev, data) {
-      (listeners[ev] || []).forEach(fn => fn(data));
+      const results = (listeners[ev] || []).map(fn => fn(data));
+      // Support async handlers — return a promise that resolves when all complete.
+      return Promise.all(results);
     },
     appendChild(child) {
       this._children.push(child);
@@ -216,15 +219,28 @@ function loadAppJs() {
     AudioContext: MockAudioContext,
   };
 
+  // Mock clipboard for export/import tests.
+  let _clipboard = '';
+  const mockNavigator = {
+    clipboard: {
+      async writeText(text) { _clipboard = text; },
+      async readText() { return _clipboard; },
+    },
+  };
+  // Expose for tests to inspect / manipulate.
+  mockNavigator.clipboard._get = () => _clipboard;
+  mockNavigator.clipboard._set = (v) => { _clipboard = v; };
+
   // ---- Sandbox ----
   const sandbox = {
     document: mockDocument,
     window: mockWindow,
     AudioContext: MockAudioContext,
     console: { error() {}, log() {} },
-    alert() {},
+    alert(msg) { sandbox._lastAlert = msg; },
     Promise,
-    navigator: {},
+    setTimeout,
+    navigator: mockNavigator,
   };
   // Provide a webkitAudioContext too (app.js falls back to it).
   sandbox.window.webkitAudioContext = MockAudioContext;
@@ -239,6 +255,7 @@ function loadAppJs() {
     elements,
     tickListener,
     dockListener,
+    clipboard: mockNavigator.clipboard,
   };
 }
 
@@ -804,6 +821,202 @@ describe('timer-tick listener', () => {
     assert.equal(ctx.elements['phase'].textContent, 'FOCUS');
     assert.equal(ctx.elements['session-label'].textContent, 'Deep Focus');
     assert.equal(ctx.elements['toggle-btn'].textContent, 'Stop');
+  });
+});
+
+// ====================== Export / Import settings =======================
+
+describe('export settings', () => {
+  beforeEach(() => {
+    ctx.clipboard._set('');
+    ctx.sandbox._lastAlert = undefined;
+  });
+
+  it('copies settings JSON to clipboard on export button click', async () => {
+    const exportBtn = ctx.elements['export-settings'];
+    await exportBtn._fire('click');
+    const copied = ctx.clipboard._get();
+    assert.ok(copied.length > 0, 'clipboard should not be empty');
+    const parsed = JSON.parse(copied);
+    assert.ok(Array.isArray(parsed.sessions), 'should have sessions array');
+    assert.equal(parsed.sessions.length, 2);
+    assert.equal(parsed.sessions[0].name, 'Pomodoro');
+    assert.equal(parsed.sessions[0].parts[0].name, 'Work');
+    assert.equal(parsed.sessions[0].parts[0].minutes, 25);
+    assert.equal(parsed.sessions[0].parts[0].extendable, false);
+    assert.equal(parsed.sessions[0].parts[0].track_time, true);
+  });
+
+  it('shows "Copied!" feedback on export button', async () => {
+    const exportBtn = ctx.elements['export-settings'];
+    exportBtn.classList._set.clear();
+    exportBtn.textContent = 'Export';
+    await exportBtn._fire('click');
+    assert.equal(exportBtn.textContent, 'Copied!');
+    assert.ok(exportBtn.classList._set.has('btn-flash'));
+  });
+});
+
+describe('import settings', () => {
+  beforeEach(() => {
+    ctx.clipboard._set('');
+    ctx.sandbox._lastAlert = undefined;
+    ctx.sandbox.sessions = [
+      { id: 'uuid-pomodoro-1', name: 'Pomodoro', parts: [
+        { name: 'Work', minutes: 25, extendable: false, track_time: true },
+        { name: 'Break', minutes: 5, extendable: false, track_time: false },
+      ]},
+    ];
+    ctx.sandbox.sessionIds = ['uuid-pomodoro-1'];
+    // Reset overlay edit state.
+    const overlay = ctx.elements['settings-overlay'];
+    overlay._editSessions = undefined;
+    overlay.classList._set.clear();
+    overlay.classList._set.add('hidden');
+  });
+
+  it('imports settings from clipboard JSON with sessions wrapper', async () => {
+    const json = JSON.stringify({
+      sessions: [
+        {
+          id: '',
+          name: 'Custom',
+          parts: [
+            { name: 'Task', minutes: 45, extendable: true, track_time: true },
+            { name: 'Rest', minutes: 15, extendable: false, track_time: false },
+          ],
+        },
+      ],
+    });
+    ctx.clipboard._set(json);
+
+    const importBtn = ctx.elements['import-settings'];
+    await importBtn._fire('click');
+
+    // Import succeeded: no alert, button shows "Imported!".
+    assert.equal(ctx.sandbox._lastAlert, undefined, 'should not alert on valid import');
+    assert.equal(importBtn.textContent, 'Imported!');
+    assert.ok(importBtn.classList._set.has('btn-flash'));
+  });
+
+  it('imports settings from a raw sessions array (no wrapper)', async () => {
+    const json = JSON.stringify([
+      { id: '', name: 'Solo', parts: [
+        { name: 'Work', minutes: 30, extendable: false, track_time: true },
+      ]},
+    ]);
+    ctx.clipboard._set(json);
+
+    const importBtn = ctx.elements['import-settings'];
+    await importBtn._fire('click');
+
+    // Import succeeded: no alert, button shows "Imported!".
+    assert.equal(ctx.sandbox._lastAlert, undefined, 'should not alert on valid import');
+    assert.equal(importBtn.textContent, 'Imported!');
+  });
+
+  it('rebuilds the settings form if the overlay is open during import', async () => {
+    // Simulate settings panel being open with edit sessions.
+    const overlay = ctx.elements['settings-overlay'];
+    overlay._editSessions = [
+      { id: 'old', name: 'Old', parts: [
+        { name: 'X', minutes: 10, extendable: false, track_time: false },
+      ]},
+    ];
+    overlay.classList._set.delete('hidden');
+
+    ctx.clipboard._set(JSON.stringify({
+      sessions: [
+        { id: '', name: 'NewSession', parts: [
+          { name: 'Task', minutes: 20, extendable: true, track_time: true },
+        ]},
+      ],
+    }));
+
+    const importBtn = ctx.elements['import-settings'];
+    await importBtn._fire('click');
+
+    // The overlay's edit sessions should be replaced with imported data.
+    const edit = overlay._editSessions;
+    assert.ok(edit, 'overlay should still have edit sessions');
+    assert.equal(edit.length, 1);
+    assert.equal(edit[0].name, 'NewSession');
+    assert.equal(edit[0].parts[0].name, 'Task');
+    assert.equal(edit[0].parts[0].minutes, 20);
+
+    // The sessions container should have been rebuilt.
+    const container = ctx.elements['sessions-container'];
+    assert.ok(container._children.length > 0, 'form should be rebuilt');
+  });
+
+  it('shows alert when clipboard is empty', async () => {
+    ctx.clipboard._set('');
+    const importBtn = ctx.elements['import-settings'];
+    await importBtn._fire('click');
+    assert.ok(
+      ctx.sandbox._lastAlert && ctx.sandbox._lastAlert.includes('empty'),
+      'should alert about empty clipboard, got: ' + ctx.sandbox._lastAlert
+    );
+  });
+
+  it('shows alert when clipboard contains invalid JSON', async () => {
+    ctx.clipboard._set('not json');
+    const importBtn = ctx.elements['import-settings'];
+    await importBtn._fire('click');
+    assert.ok(
+      ctx.sandbox._lastAlert && ctx.sandbox._lastAlert.includes('valid JSON'),
+      'should alert about invalid JSON, got: ' + ctx.sandbox._lastAlert
+    );
+  });
+
+  it('shows alert when JSON has no sessions array', async () => {
+    ctx.clipboard._set(JSON.stringify({ foo: 1 }));
+    const importBtn = ctx.elements['import-settings'];
+    await importBtn._fire('click');
+    assert.ok(
+      ctx.sandbox._lastAlert && ctx.sandbox._lastAlert.includes('sessions'),
+      'should alert about missing sessions, got: ' + ctx.sandbox._lastAlert
+    );
+  });
+
+  it('shows alert when a session has no name', async () => {
+    ctx.clipboard._set(JSON.stringify({
+      sessions: [{ parts: [{ name: 'X', minutes: 10 }] }],
+    }));
+    const importBtn = ctx.elements['import-settings'];
+    await importBtn._fire('click');
+    assert.ok(
+      ctx.sandbox._lastAlert && ctx.sandbox._lastAlert.includes('name'),
+      'should alert about missing name, got: ' + ctx.sandbox._lastAlert
+    );
+  });
+
+  it('shows alert when part minutes are out of range', async () => {
+    ctx.clipboard._set(JSON.stringify({
+      sessions: [{ name: 'Bad', parts: [{ name: 'X', minutes: 200 }] }],
+    }));
+    const importBtn = ctx.elements['import-settings'];
+    await importBtn._fire('click');
+    assert.ok(
+      ctx.sandbox._lastAlert && ctx.sandbox._lastAlert.includes('between 1 and 120'),
+      'should alert about minutes range, got: ' + ctx.sandbox._lastAlert
+    );
+  });
+
+  it('shows "Imported!" feedback on success', async () => {
+    ctx.clipboard._set(JSON.stringify({
+      sessions: [
+        { id: '', name: 'Quick', parts: [
+          { name: 'Sprint', minutes: 10, extendable: false, track_time: false },
+        ]},
+      ],
+    }));
+    const importBtn = ctx.elements['import-settings'];
+    importBtn.classList._set.clear();
+    importBtn.textContent = 'Import';
+    await importBtn._fire('click');
+    assert.equal(importBtn.textContent, 'Imported!');
+    assert.ok(importBtn.classList._set.has('btn-flash'));
   });
 });
 

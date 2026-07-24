@@ -282,13 +282,31 @@ fn save_settings(sessions: &[Session], active_id: &str) {
 
 // ---- Record file (per-session, per-part time tracking) ----
 
-/// date → session_uuid → part_index_string → accumulated seconds
-type PomodoroRecord = BTreeMap<String, BTreeMap<String, BTreeMap<String, u64>>>;
+/// Top-level record file. Meta maps IDs to names (written once). Records
+/// hold the actual per-day time accumulations keyed by date → session_id
+/// → part_index → seconds.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct PomodoroRecord {
+    #[serde(default)]
+    meta: RecordMeta,
+    #[serde(default)]
+    records: BTreeMap<String, BTreeMap<String, BTreeMap<String, u64>>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct RecordMeta {
+    /// session_uuid → session_name
+    #[serde(default)]
+    sessions: BTreeMap<String, String>,
+    /// session_uuid → part_index → part_name
+    #[serde(default)]
+    parts: BTreeMap<String, BTreeMap<String, String>>,
+}
 
 fn load_record() -> PomodoroRecord {
     match std::fs::read_to_string(record_path()) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-        Err(_) => BTreeMap::new(),
+        Err(_) => PomodoroRecord::default(),
     }
 }
 
@@ -422,15 +440,16 @@ pub fn load_daily_total(session_id: Option<&str>) -> u64 {
     let record = load_record();
     let today = today_string();
     record
+        .records
         .get(&today)
         .map(|day| {
             if let Some(id) = session_id {
                 day.get(id)
-                    .map(|session| session.values().sum())
+                    .map(|parts| parts.values().sum())
                     .unwrap_or(0)
             } else {
                 day.values()
-                    .flat_map(|session| session.values())
+                    .flat_map(|parts| parts.values())
                     .sum()
             }
         })
@@ -438,22 +457,44 @@ pub fn load_daily_total(session_id: Option<&str>) -> u64 {
 }
 
 /// Records `seconds` of tracked time for a specific session/part on today's
-/// date. Returns the new daily total.
-fn add_record_seconds(session_id: &str, part_index: usize, seconds: u64) -> u64 {
+/// date. Session and part names are stored once in the meta section; the
+/// records section keeps only IDs and accumulated seconds.
+/// Returns the new daily total.
+fn add_record_seconds(
+    session_id: &str,
+    session_name: &str,
+    part_index: usize,
+    part_name: &str,
+    seconds: u64,
+) -> u64 {
     let mut record = load_record();
+
+    // Store names once in meta (only on first write).
+    record
+        .meta
+        .sessions
+        .entry(session_id.to_string())
+        .or_insert_with(|| session_name.to_string());
+    record
+        .meta
+        .parts
+        .entry(session_id.to_string())
+        .or_default()
+        .entry(part_index.to_string())
+        .or_insert_with(|| part_name.to_string());
+
+    // Accumulate seconds in today's record.
     let today = today_string();
-    let day_entry = record.entry(today).or_default();
+    let day_entry = record.records.entry(today).or_default();
     let session_entry = day_entry.entry(session_id.to_string()).or_default();
     let prev = session_entry
         .get(&part_index.to_string())
         .copied()
         .unwrap_or(0);
     session_entry.insert(part_index.to_string(), prev + seconds);
-    // Compute daily total before the mutable borrow ends.
-    let daily_total: u64 = day_entry
-        .values()
-        .flat_map(|s| s.values())
-        .sum();
+
+    // Compute daily total for the current session.
+    let daily_total: u64 = session_entry.values().sum();
     save_record(&record);
     daily_total
 }
@@ -625,7 +666,7 @@ pub fn start_timer(
 
     std::thread::spawn(move || {
         // Snapshot part metadata from the session at start time.
-        let _part_names: Vec<String> = sessions[active_idx]
+        let part_names: Vec<String> = sessions[active_idx]
             .parts.iter().map(|p| p.name.clone()).collect();
         let part_seconds: Vec<i64> = sessions[active_idx]
             .parts.iter().map(|p| minutes_to_seconds(p.minutes, test_mode)).collect();
@@ -634,6 +675,7 @@ pub fn start_timer(
         let part_track_time: Vec<bool> = sessions[active_idx]
             .parts.iter().map(|p| p.track_time).collect();
         let session_id = active_id;
+        let session_name = sessions[active_idx].name.clone();
 
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -709,7 +751,8 @@ pub fn start_timer(
 
             if let Some(secs) = tracked_completed {
                 let pi = completed_part_index.unwrap_or(0);
-                add_record_seconds(&session_id, pi, secs);
+                let pn = part_names.get(pi).map(|s| s.as_str()).unwrap_or("Unknown");
+                add_record_seconds(&session_id, &session_name, pi, pn, secs);
             }
 
             let daily = load_daily_total(Some(&session_id));
@@ -745,7 +788,9 @@ pub fn stop_timer(
     let part = &sessions[idx].parts[s.current_part_index];
     let full_seconds = minutes_to_seconds(part.minutes, s.test_mode) as u64;
     let session_id = s.active_session_id.clone();
+    let session_name = sessions[idx].name.clone();
     let part_index = s.current_part_index;
+    let part_name = part.name.clone();
 
     if let Some(seconds) = stop_tracked_seconds(
         part.track_time,
@@ -755,7 +800,7 @@ pub fn stop_timer(
         s.overtime_tracked_seconds,
     ) {
         drop(s);
-        add_record_seconds(&session_id, part_index, seconds);
+        add_record_seconds(&session_id, &session_name, part_index, &part_name, seconds);
         s = state.lock().unwrap();
     }
 
@@ -794,7 +839,9 @@ pub fn continue_timer(
         .collect();
     let first_seconds = part_seconds[0];
     let session_id = s.active_session_id.clone();
+    let session_name = s.settings.sessions[idx].name.clone();
     let part_index = s.current_part_index;
+    let part_name = s.settings.sessions[idx].parts[part_index].name.clone();
 
     let overtime = s.overtime_tracked_seconds;
     s.overtime_tracked_seconds = 0;
@@ -809,7 +856,7 @@ pub fn continue_timer(
     drop(s);
 
     if overtime > 0 {
-        add_record_seconds(&session_id, part_index, overtime);
+        add_record_seconds(&session_id, &session_name, part_index, &part_name, overtime);
     }
 
     let _ = app.emit("timer-tick", &tick);

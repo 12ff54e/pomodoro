@@ -93,7 +93,7 @@ Pomodoro desktop clock built with Rust + Tauri v2. Vanilla HTML/CSS/JS frontend 
 **Commands:**
 
 - `get_state` — returns `TimerTick` snapshot (includes `active_session_id`, `part_index`)
-- `get_daily_total` — returns today's total tracked seconds (sum across all sessions/parts in record)
+- `get_daily_total` — returns today's total tracked seconds for the current session (or all sessions when no `session_id` is passed)
 - `get_settings` — returns current `PomodoroSettings`
 - `start_timer` — sets `running=true`, spawns `std::thread` that ticks every 1s. Emits an initial tick immediately for instant UI feedback. When a non-extendable part hits 0 → auto-advances to next part. When an extendable part hits 0 → enters `paused` overtime (keeps ticking into negative). When the last part finishes → stops and resets. Records full part duration on auto-complete when `track_time` is enabled.
 - `stop_timer` — sets `running=false`, records partial tracked time (handles overtime correctly by only adding overtime seconds since the full duration was already recorded at the zero-transition), resets to first part, emits final tick
@@ -136,7 +136,9 @@ User clicks Stop during overtime → records only the overtime seconds (full dur
 
 **Time recording:** A part's `track_time` flag controls whether time is recorded.
 Completed durations and overtime are written to `pomodoro_record.json` keyed by
-date → session UUID → part index. The daily total sums across all sessions/parts.
+date → session UUID → {name, parts: {part_index → {name, seconds}}}. Session and
+part names are stored alongside the accumulated seconds. The daily total shown in
+the UI is scoped to the current session.
 
 ## Releasing
 

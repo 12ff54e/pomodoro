@@ -558,16 +558,14 @@ overlay.addEventListener('click', (e) => {
 // ---- Initial load ----
 (async () => {
   try {
-    const [tick, daily, settings, docked] = await Promise.all([
+    const [tick, settings, docked] = await Promise.all([
       invoke('get_state'),
-      invoke('get_daily_total'),
       invoke('get_settings'),
       invoke('get_dock_state'),
     ]);
     sessions = settings.sessions;
     sessionIds = settings.sessions.map(s => s.id);
     render(tick);
-    dailyTotalEl.textContent = 'Today: ' + formatDailyTotal(daily);
     setDocked(docked);
   } catch (e) {
     console.error('init failed:', e);

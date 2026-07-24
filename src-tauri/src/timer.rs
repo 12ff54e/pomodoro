@@ -415,17 +415,24 @@ pub fn load_settings() -> (PomodoroSettings, String) {
     (settings, active_id)
 }
 
-/// Reads today's total tracked seconds from the record file (sum across all
-/// sessions and parts).
-pub fn load_daily_total() -> u64 {
+/// Reads today's total tracked seconds from the record file. When
+/// `session_id` is provided, only that session's parts are summed;
+/// otherwise all sessions are summed.
+pub fn load_daily_total(session_id: Option<&str>) -> u64 {
     let record = load_record();
     let today = today_string();
     record
         .get(&today)
         .map(|day| {
-            day.values()
-                .flat_map(|session| session.values())
-                .sum()
+            if let Some(id) = session_id {
+                day.get(id)
+                    .map(|session| session.values().sum())
+                    .unwrap_or(0)
+            } else {
+                day.values()
+                    .flat_map(|session| session.values())
+                    .sum()
+            }
         })
         .unwrap_or(0)
 }
@@ -452,7 +459,7 @@ fn add_record_seconds(session_id: &str, part_index: usize, seconds: u64) -> u64 
 }
 
 /// Build a TimerTick from the current state.
-fn build_tick(state: &PomodoroState, daily_total: u64) -> TimerTick {
+fn build_tick(state: &PomodoroState) -> TimerTick {
     let idx = find_session_index(&state.settings.sessions, &state.active_session_id)
         .unwrap_or(0);
     let session = &state.settings.sessions[idx];
@@ -462,6 +469,7 @@ fn build_tick(state: &PomodoroState, daily_total: u64) -> TimerTick {
     } else {
         part.name.clone()
     };
+    let daily = load_daily_total(Some(&state.active_session_id));
     TimerTick {
         remaining_seconds: state.remaining_seconds,
         session_name: session.name.clone(),
@@ -469,7 +477,7 @@ fn build_tick(state: &PomodoroState, daily_total: u64) -> TimerTick {
         part_index: state.current_part_index,
         running: state.running,
         paused: state.paused,
-        daily_total_seconds: daily_total,
+        daily_total_seconds: daily,
         active_session_id: state.active_session_id.clone(),
         session_count: state.settings.sessions.len(),
     }
@@ -576,12 +584,12 @@ fn continue_advance(
 #[tauri::command]
 pub fn get_state(state: State<'_, Mutex<PomodoroState>>) -> TimerTick {
     let s = state.lock().unwrap();
-    build_tick(&s, 0)
+    build_tick(&s)
 }
 
 #[tauri::command]
-pub fn get_daily_total() -> u64 {
-    load_daily_total()
+pub fn get_daily_total(session_id: Option<String>) -> u64 {
+    load_daily_total(session_id.as_deref())
 }
 
 #[tauri::command]
@@ -611,8 +619,7 @@ pub fn start_timer(
 
     // Emit an initial tick immediately so the frontend reflects the new
     // state without waiting for the first 1 s sleep in the timer thread.
-    let daily = load_daily_total();
-    let tick = build_tick(&s, daily);
+    let tick = build_tick(&s);
     drop(s);
     let _ = app.emit("timer-tick", &tick);
 
@@ -705,7 +712,7 @@ pub fn start_timer(
                 add_record_seconds(&session_id, pi, secs);
             }
 
-            let daily = load_daily_total();
+            let daily = load_daily_total(Some(&session_id));
             let tick = TimerTick {
                 daily_total_seconds: daily,
                 ..tick
@@ -762,8 +769,7 @@ pub fn stop_timer(
         s.test_mode,
     );
 
-    let daily = load_daily_total();
-    let tick = build_tick(&s, daily);
+    let tick = build_tick(&s);
     drop(s);
 
     let _ = app.emit("timer-tick", &tick);
@@ -799,8 +805,7 @@ pub fn continue_timer(
     s.running = adv.new_running;
     s.paused = adv.new_paused;
 
-    let daily = load_daily_total();
-    let tick = build_tick(&s, daily);
+    let tick = build_tick(&s);
     drop(s);
 
     if overtime > 0 {
@@ -859,8 +864,7 @@ pub fn update_settings(
         );
     }
 
-    let daily = load_daily_total();
-    let tick = build_tick(&s, daily);
+    let tick = build_tick(&s);
     drop(s);
 
     if !tick.running {
@@ -896,8 +900,7 @@ pub fn switch_session(
 
     save_settings(&s.settings.sessions, &s.active_session_id);
 
-    let daily = load_daily_total();
-    let tick = build_tick(&s, daily);
+    let tick = build_tick(&s);
     drop(s);
 
     let _ = app.emit("timer-tick", &tick);
@@ -1143,14 +1146,14 @@ mod tests {
             is_docked: false,
             test_mode: false,
         };
-        let tick = build_tick(&state, 3600);
+        let tick = build_tick(&state);
         assert_eq!(tick.remaining_seconds, 1500);
         assert_eq!(tick.session_name, "Test Session");
         assert_eq!(tick.part_name, "Focus");
         assert_eq!(tick.part_index, 0);
         assert!(tick.running);
         assert!(!tick.paused);
-        assert_eq!(tick.daily_total_seconds, 3600);
+        assert_eq!(tick.daily_total_seconds, 0); // No record file in test env
         assert_eq!(tick.active_session_id, "test-sid-1");
         assert_eq!(tick.session_count, 1);
     }
@@ -1178,7 +1181,7 @@ mod tests {
             is_docked: false,
             test_mode: false,
         };
-        let tick = build_tick(&state, 0);
+        let tick = build_tick(&state);
         assert_eq!(tick.remaining_seconds, -5);
         assert!(tick.paused);
         assert_eq!(tick.part_name, "W");
@@ -1210,7 +1213,7 @@ mod tests {
             is_docked: false,
             test_mode: false,
         };
-        let tick = build_tick(&state, 0);
+        let tick = build_tick(&state);
         assert_eq!(tick.part_name, "Part 3");
         assert_eq!(tick.part_index, 2);
     }

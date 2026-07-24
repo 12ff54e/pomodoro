@@ -304,10 +304,51 @@ struct RecordMeta {
 }
 
 fn load_record() -> PomodoroRecord {
-    match std::fs::read_to_string(record_path()) {
-        Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-        Err(_) => PomodoroRecord::default(),
+    let s = match std::fs::read_to_string(record_path()) {
+        Ok(s) => s,
+        Err(_) => return PomodoroRecord::default(),
+    };
+    // Try new format first; fall back to old format and migrate.
+    match parse_record(&s) {
+        ParseResult::New(r) => r,
+        ParseResult::Old(r) => {
+            save_record(&r);
+            r
+        }
+        ParseResult::Invalid => PomodoroRecord::default(),
     }
+}
+
+/// Result of trying to parse a record file.  Used by `load_record` so the
+/// migration path can be unit-tested without touching the filesystem.
+#[derive(Debug)]
+enum ParseResult {
+    /// Parsed as the current `{ meta, records }` format.
+    New(PomodoroRecord),
+    /// Parsed as the old bare `date → uuid → part → seconds` map.
+    Old(PomodoroRecord),
+    /// Not valid JSON or completely unknown shape.
+    Invalid,
+}
+
+fn parse_record(json: &str) -> ParseResult {
+    if let Ok(r) = serde_json::from_str::<PomodoroRecord>(json) {
+        // Guard: an empty-object parse of the old format would succeed as
+        // a PomodoroRecord with empty meta + empty records, so check that
+        // we actually have content.
+        if !r.records.is_empty() || !r.meta.sessions.is_empty() {
+            return ParseResult::New(r);
+        }
+    }
+    if let Ok(old) = serde_json::from_str::<BTreeMap<String, BTreeMap<String, BTreeMap<String, u64>>>>(json) {
+        if !old.is_empty() {
+            return ParseResult::Old(PomodoroRecord {
+                meta: RecordMeta::default(),
+                records: old,
+            });
+        }
+    }
+    ParseResult::Invalid
 }
 
 fn save_record(record: &PomodoroRecord) {
@@ -1685,5 +1726,83 @@ mod tests {
         assert_eq!(sessions[0].parts[1].minutes, 10);
         assert_eq!(sessions[0].parts[1].extendable, false);
         assert_eq!(sessions[0].parts[1].track_time, false);
+    }
+
+    // ---- parse_record (record-file migration) ----
+
+    #[test]
+    fn parse_record_new_format() {
+        let json = r#"{
+            "meta": {
+                "sessions": {"sid-a": "Pomodoro"},
+                "parts": {"sid-a": {"0": "Work", "1": "Break"}}
+            },
+            "records": {
+                "2026-07-24": {"sid-a": {"0": 1500, "1": 300}}
+            }
+        }"#;
+        match parse_record(json) {
+            ParseResult::New(r) => {
+                assert_eq!(r.meta.sessions.get("sid-a").unwrap(), "Pomodoro");
+                assert_eq!(r.meta.parts.get("sid-a").unwrap().get("0").unwrap(), "Work");
+                assert_eq!(r.records.get("2026-07-24").unwrap().get("sid-a").unwrap().get("0").unwrap(), &1500);
+            }
+            other => panic!("expected New, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_record_old_format_is_migrated() {
+        let json = r#"{
+            "2026-07-24": {
+                "sid-a": {"0": 1500, "1": 300}
+            }
+        }"#;
+        match parse_record(json) {
+            ParseResult::Old(r) => {
+                assert!(r.meta.sessions.is_empty());
+                assert!(r.meta.parts.is_empty());
+                let day = r.records.get("2026-07-24").unwrap();
+                assert_eq!(day.get("sid-a").unwrap().get("0").unwrap(), &1500);
+                assert_eq!(day.get("sid-a").unwrap().get("1").unwrap(), &300);
+            }
+            other => panic!("expected Old, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_record_empty_object_is_invalid() {
+        // An empty-object parse of the new format would succeed with empty
+        // meta + empty records, which would also match as old format (empty
+        // map).  We treat this as invalid so we don't silently swallow
+        // garbage.
+        match parse_record("{}") {
+            ParseResult::Invalid => {}
+            other => panic!("expected Invalid, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_record_garbage_is_invalid() {
+        match parse_record("not json") {
+            ParseResult::Invalid => {}
+            other => panic!("expected Invalid, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_record_new_format_with_records_only() {
+        let json = r#"{
+            "records": {
+                "2026-07-24": {"sid-a": {"0": 1500}}
+            }
+        }"#;
+        match parse_record(json) {
+            ParseResult::New(r) => {
+                let day = r.records.get("2026-07-24").unwrap();
+                assert_eq!(day.get("sid-a").unwrap().get("0").unwrap(), &1500);
+            }
+            other => panic!("expected New, got {:?}", other),
+        }
     }
 }

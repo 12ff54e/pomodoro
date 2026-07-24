@@ -1,10 +1,12 @@
 use tauri::Manager;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 mod timer;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             let (settings, active_id) = timer::load_settings();
             let test_mode = std::env::var("POMODORO_TEST_MODE")
@@ -29,6 +31,59 @@ pub fn run() {
                 test_mode,
             };
             app.manage(std::sync::Mutex::new(state));
+
+            // Register global keyboard shortcuts (work even when app is not focused).
+            let start_shortcut = "CmdOrCtrl+Shift+S"
+                .parse::<Shortcut>()
+                .expect("invalid shortcut string CmdOrCtrl+Shift+S");
+            if let Err(e) = app.global_shortcut().on_shortcut(
+                start_shortcut,
+                |app_handle, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        let _ = timer::start_timer(
+                            app_handle.clone(),
+                            app_handle.state::<std::sync::Mutex<timer::PomodoroState>>(),
+                        );
+                    }
+                },
+            ) {
+                eprintln!("Failed to register global shortcut CmdOrCtrl+Shift+S: {}", e);
+            }
+
+            let stop_shortcut = "CmdOrCtrl+Shift+X"
+                .parse::<Shortcut>()
+                .expect("invalid shortcut string CmdOrCtrl+Shift+X");
+            if let Err(e) = app.global_shortcut().on_shortcut(
+                stop_shortcut,
+                |app_handle, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        let _ = timer::stop_timer(
+                            app_handle.clone(),
+                            app_handle.state::<std::sync::Mutex<timer::PomodoroState>>(),
+                        );
+                    }
+                },
+            ) {
+                eprintln!("Failed to register global shortcut CmdOrCtrl+Shift+X: {}", e);
+            }
+
+            let continue_shortcut = "CmdOrCtrl+Shift+C"
+                .parse::<Shortcut>()
+                .expect("invalid shortcut string CmdOrCtrl+Shift+C");
+            if let Err(e) = app.global_shortcut().on_shortcut(
+                continue_shortcut,
+                |app_handle, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        let _ = timer::continue_timer(
+                            app_handle.clone(),
+                            app_handle.state::<std::sync::Mutex<timer::PomodoroState>>(),
+                        );
+                    }
+                },
+            ) {
+                eprintln!("Failed to register global shortcut CmdOrCtrl+Shift+C: {}", e);
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -233,6 +233,12 @@ sessionRightBtn.addEventListener('click', async () => {
 document.addEventListener('keydown', async (e) => {
   if (e.target.tagName === 'INPUT') return;
 
+  // Escape closes the settings panel if it's open.
+  if (e.key === 'Escape' && !overlay.classList.contains('hidden')) {
+    closeSettings();
+    return;
+  }
+
   // Space/Enter to continue when paused (overtime) — not in dock mode.
   if (!isDocked && isPaused && (e.key === ' ' || e.key === 'Enter')) {
     e.preventDefault();

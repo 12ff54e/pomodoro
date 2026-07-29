@@ -22,7 +22,7 @@ const ALL_IDS = [
   'settings-btn', 'settings-overlay', 'sessions-container',
   'add-session-btn', 'export-settings', 'import-settings',
   'save-settings', 'cancel-settings',
-  'daily-total', 'body-el',
+  'daily-total', 'tab-shortcuts', 'body-el',
 ];
 
 /** Build a simple DOM element stub. */
@@ -119,6 +119,11 @@ function loadAppJs() {
       return elements['body-el'];
     },
     addEventListener() {},
+    querySelectorAll(selector) {
+      // Return an empty array for class/tag selectors at load time.
+      // Individual tests can stub this if needed.
+      return [];
+    },
   };
 
   // ---- Mock AudioContext (constructable) ----

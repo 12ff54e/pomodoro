@@ -11,6 +11,8 @@
     "core:window:allow-center",
     "core:window:allow-set-decorations",
     "global-shortcut:allow-register",
-    "global-shortcut:allow-is-registered"
+    "global-shortcut:allow-is-registered",
+    "global-shortcut:allow-unregister",
+    "global-shortcut:allow-unregister-all"
   ]
 }

@@ -11,6 +11,7 @@ let isPaused = false;
 let wasRunning = false;
 let lastPartName = '';
 let isDocked = false;
+let shortcutConfig = { start: 'CmdOrCtrl+Shift+S', stop: 'CmdOrCtrl+Shift+X', continue: 'CmdOrCtrl+Shift+C' };
 
 // ---- Audio context (lazy, created on first beep) ----
 let audioCtx = null;
@@ -58,6 +59,7 @@ const importBtn = document.getElementById('import-settings');
 const saveBtn = document.getElementById('save-settings');
 const cancelBtn = document.getElementById('cancel-settings');
 const dailyTotalEl = document.getElementById('daily-total');
+const tabShortcuts = document.getElementById('tab-shortcuts');
 
 // ---- Helpers ----
 function formatTime(totalSeconds) {
@@ -393,6 +395,117 @@ function buildSettingsForm(editSessions) {
   });
 }
 
+/** Build the shortcuts editing form. */
+function buildShortcutsForm(editShortcuts) {
+  tabShortcuts.innerHTML = '';
+
+  const display = (s) => s ? s.replace(/^CmdOrCtrl/, 'Ctrl/Cmd').replace(/Key|Digit/g, '') : '';
+
+  const actions = [
+    { key: 'start', label: 'Start Timer' },
+    { key: 'stop', label: 'Stop Timer' },
+    { key: 'continue', label: 'Continue' },
+  ];
+
+  actions.forEach(({ key, label }) => {
+    const row = document.createElement('div');
+    row.className = 'shortcut-row';
+
+    const lbl = document.createElement('span');
+    lbl.className = 'shortcut-label';
+    lbl.textContent = label;
+
+    const keyBtn = document.createElement('button');
+    keyBtn.className = 'shortcut-key';
+    keyBtn.textContent = editShortcuts[key] ? display(editShortcuts[key]) : '—';
+    if (!editShortcuts[key]) {
+      keyBtn.classList.add('empty');
+    }
+
+    // Click to start recording a new shortcut.
+    keyBtn.addEventListener('click', () => {
+      let cancelled = false;
+      const previous = editShortcuts[key];
+      keyBtn.textContent = 'Press keys…';
+      keyBtn.classList.add('recording');
+      keyBtn.classList.remove('empty');
+
+      function onKeyDown(e) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (e.key === 'Escape') {
+          cancelled = true;
+          cleanup();
+          editShortcuts[key] = previous;
+          keyBtn.textContent = previous ? display(previous) : '—';
+          if (!previous) keyBtn.classList.add('empty');
+          keyBtn.classList.remove('recording');
+          return;
+        }
+
+        // Build the shortcut string from modifiers + physical key code.
+        const modifiers = [];
+        if (e.ctrlKey || e.metaKey) modifiers.push('CmdOrCtrl');
+        if (e.shiftKey) modifiers.push('Shift');
+        if (e.altKey) modifiers.push('Alt');
+
+        // Only accept keys that produce a physical code.
+        if (!e.code || (!e.code.startsWith('Key') && !e.code.startsWith('Digit') && e.code !== 'Space')) {
+          return;
+        }
+        if (modifiers.length === 0) return;
+
+        const shortcut = [...modifiers, e.code].join('+');
+        cleanup();
+        editShortcuts[key] = shortcut;
+        keyBtn.textContent = display(shortcut);
+        keyBtn.classList.remove('recording');
+      }
+
+      function cleanup() {
+        document.removeEventListener('keydown', onKeyDown, true);
+        document.removeEventListener('mousedown', onMouseDown, true);
+      }
+
+      function onMouseDown(e) {
+        // Clicking outside cancels recording.
+        if (!keyBtn.contains(e.target)) {
+          cancelled = true;
+          cleanup();
+          editShortcuts[key] = previous;
+          keyBtn.textContent = previous ? display(previous) : '—';
+          if (!previous) keyBtn.classList.add('empty');
+          keyBtn.classList.remove('recording');
+        }
+      }
+
+      // Use capture phase to intercept before browser/OS.
+      document.addEventListener('keydown', onKeyDown, true);
+      // Slight delay so this click doesn't immediately cancel itself.
+      setTimeout(() => {
+        document.addEventListener('mousedown', onMouseDown, true);
+      }, 0);
+    });
+
+    // Clear button.
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'btn-clear-shortcut';
+    clearBtn.textContent = '×';  // ×
+    clearBtn.title = 'Clear shortcut';
+    clearBtn.addEventListener('click', () => {
+      editShortcuts[key] = '';
+      keyBtn.textContent = '—';
+      keyBtn.classList.add('empty');
+    });
+
+    row.appendChild(lbl);
+    row.appendChild(keyBtn);
+    row.appendChild(clearBtn);
+    tabShortcuts.appendChild(row);
+  });
+}
+
 // ---- Settings open / close ----
 settingsBtn.addEventListener('click', () => {
   // Deep-clone sessions for editing.
@@ -407,11 +520,39 @@ settingsBtn.addEventListener('click', () => {
   }));
   buildSettingsForm(editSessions);
 
-  // Store reference for save.
+  // Deep-clone shortcuts for editing.
+  const editShortcuts = {
+    start: shortcutConfig.start || '',
+    stop: shortcutConfig.stop || '',
+    continue: shortcutConfig.continue || '',
+  };
+  buildShortcutsForm(editShortcuts);
+
+  // Store references for save.
   overlay._editSessions = editSessions;
+  overlay._editShortcuts = editShortcuts;
+
+  // Reset to first tab.
+  switchSettingsTab('sessions');
 
   overlay.classList.remove('hidden');
 });
+
+// ---- Tab switching ----
+document.querySelectorAll('.settings-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    switchSettingsTab(tab.dataset.tab);
+  });
+});
+
+function switchSettingsTab(tabName) {
+  document.querySelectorAll('.settings-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === tabName);
+  });
+  document.querySelectorAll('.tab-content').forEach(c => {
+    c.classList.toggle('hidden', c.id !== 'tab-' + tabName);
+  });
+}
 
 cancelBtn.addEventListener('click', () => {
   overlay.classList.add('hidden');
@@ -443,9 +584,22 @@ saveBtn.addEventListener('click', async () => {
   }
 
   try {
-    const newSettings = await invoke('update_settings', { sessions: edit });
+    const editShortcuts = overlay._editShortcuts;
+    const newSettings = await invoke('update_settings', {
+      sessions: edit,
+      shortcuts: editShortcuts
+        ? {
+            start: editShortcuts.start,
+            stop: editShortcuts.stop,
+            continue: editShortcuts.continue,
+          }
+        : undefined,
+    });
     sessions = newSettings.sessions;
     sessionIds = newSettings.sessions.map(s => s.id);
+    if (newSettings.shortcuts) {
+      shortcutConfig = newSettings.shortcuts;
+    }
     overlay.classList.add('hidden');
   } catch (e) {
     console.error('update_settings failed:', e);
@@ -515,9 +669,12 @@ importBtn.addEventListener('click', async () => {
       }
     }
 
-    const newSettings = await invoke('update_settings', { sessions });
+    const newSettings = await invoke('update_settings', { sessions, shortcuts: undefined });
     sessions = newSettings.sessions;
     sessionIds = newSettings.sessions.map(s => s.id);
+    if (newSettings.shortcuts) {
+      shortcutConfig = newSettings.shortcuts;
+    }
 
     // Refresh the form if the settings panel is still open.
     const edit = overlay._editSessions;
@@ -565,6 +722,9 @@ overlay.addEventListener('click', (e) => {
     ]);
     sessions = settings.sessions;
     sessionIds = settings.sessions.map(s => s.id);
+    if (settings.shortcuts) {
+      shortcutConfig = settings.shortcuts;
+    }
     render(tick);
     setDocked(docked);
   } catch (e) {

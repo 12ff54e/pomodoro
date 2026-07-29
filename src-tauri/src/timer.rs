@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::SystemTime;
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 // ---------------------------------------------------------------------------
@@ -30,8 +31,28 @@ pub struct Session {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShortcutConfig {
+    pub start: String,
+    pub stop: String,
+    #[serde(rename = "continue")]
+    pub continue_: String,
+}
+
+impl Default for ShortcutConfig {
+    fn default() -> Self {
+        Self {
+            start: "CmdOrCtrl+Shift+S".into(),
+            stop: "CmdOrCtrl+Shift+X".into(),
+            continue_: "CmdOrCtrl+Shift+C".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PomodoroSettings {
     pub sessions: Vec<Session>,
+    #[serde(default)]
+    pub shortcuts: ShortcutConfig,
 }
 
 impl Default for PomodoroSettings {
@@ -55,6 +76,7 @@ impl Default for PomodoroSettings {
                     },
                 ],
             }],
+            shortcuts: ShortcutConfig::default(),
         }
     }
 }
@@ -140,6 +162,10 @@ struct SettingsFile {
     #[serde(default)]
     #[serde(rename = "sessionType")]
     session_type: Option<String>,
+
+    // Shortcuts config (new format).
+    #[serde(default)]
+    shortcuts: Option<ShortcutConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -253,7 +279,7 @@ fn load_settings_file() -> SettingsFile {
     file
 }
 
-fn save_settings(sessions: &[Session], active_id: &str) {
+fn save_settings(sessions: &[Session], active_id: &str, shortcuts: &ShortcutConfig) {
     let defs: Vec<SessionDef> = sessions
         .iter()
         .map(|s| SessionDef {
@@ -274,6 +300,11 @@ fn save_settings(sessions: &[Session], active_id: &str) {
     let file = serde_json::json!({
         "sessions": defs,
         "activeSessionId": active_id,
+        "shortcuts": {
+            "start": shortcuts.start,
+            "stop": shortcuts.stop,
+            "continue": shortcuts.continue_,
+        },
     });
     if let Ok(json) = serde_json::to_string_pretty(&file) {
         let _ = std::fs::write(settings_path(), json);
@@ -447,12 +478,14 @@ fn settings_from_file(file: SettingsFile) -> (PomodoroSettings, String) {
             _ => sessions.first().map(|s| s.id.clone()).unwrap_or_default(),
         };
 
-        (PomodoroSettings { sessions }, active_id)
+        let shortcuts = file.shortcuts.unwrap_or_default();
+        (PomodoroSettings { sessions, shortcuts }, active_id)
     } else if file.work_minutes.is_some() || file.play_minutes.is_some() {
         // Old format — migrate from legacy fields.
         let sessions = legacy_sessions(&file);
         let active_id = sessions[0].id.clone();
-        (PomodoroSettings { sessions }, active_id)
+        let shortcuts = file.shortcuts.unwrap_or_default();
+        (PomodoroSettings { sessions, shortcuts }, active_id)
     } else {
         // No file yet — use defaults.
         let settings = PomodoroSettings::default();
@@ -469,7 +502,7 @@ pub fn load_settings() -> (PomodoroSettings, String) {
     let (settings, active_id) = settings_from_file(file);
     if has_legacy {
         // Persist the migration to disk so we don't migrate again.
-        save_settings(&settings.sessions, &active_id);
+        save_settings(&settings.sessions, &active_id, &settings.shortcuts);
     }
     (settings, active_id)
 }
@@ -904,11 +937,51 @@ pub fn continue_timer(
     Ok(())
 }
 
+/// Register a single global shortcut with the given handler.
+/// Silently ignores empty strings and parse/registration errors.
+fn register_one<F>(app: &AppHandle, s: &str, handler: F)
+where
+    F: Fn(&AppHandle) + Send + Sync + 'static,
+{
+    if s.is_empty() {
+        return;
+    }
+    let shortcut = match s.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+        Ok(sc) => sc,
+        Err(_) => return,
+    };
+    let _ = app.global_shortcut().on_shortcut(
+        shortcut,
+        move |app_handle, _sc, event| {
+            if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                handler(app_handle);
+            }
+        },
+    );
+}
+
+/// Unregister all global shortcuts and re-register from config.
+/// Called at startup and whenever shortcut settings change.
+pub fn register_shortcuts(app: &AppHandle, shortcuts: &ShortcutConfig) {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let _ = app.global_shortcut().unregister_all();
+    register_one(app, &shortcuts.start, |app_handle| {
+        let _ = start_timer(app_handle.clone(), app_handle.state());
+    });
+    register_one(app, &shortcuts.stop, |app_handle| {
+        let _ = stop_timer(app_handle.clone(), app_handle.state());
+    });
+    register_one(app, &shortcuts.continue_, |app_handle| {
+        let _ = continue_timer(app_handle.clone(), app_handle.state());
+    });
+}
+
 #[tauri::command]
 pub fn update_settings(
     app: AppHandle,
     state: State<'_, Mutex<PomodoroState>>,
     sessions: Vec<Session>,
+    shortcuts: Option<ShortcutConfig>,
 ) -> Result<PomodoroSettings, String> {
     validate_sessions(&sessions)?;
 
@@ -923,11 +996,14 @@ pub fn update_settings(
         })
         .collect();
 
+    let mut s = state.lock().unwrap();
+    let shortcut_cfg = shortcuts.unwrap_or_else(|| s.settings.shortcuts.clone());
+
     let new_settings = PomodoroSettings {
         sessions: sessions.clone(),
+        shortcuts: shortcut_cfg.clone(),
     };
 
-    let mut s = state.lock().unwrap();
     // If the active session UUID no longer exists (session deleted),
     // fall back to the first session.
     if find_session_index(&sessions, &s.active_session_id).is_none() {
@@ -937,7 +1013,10 @@ pub fn update_settings(
     s.settings = new_settings;
 
     // Persist.
-    save_settings(&s.settings.sessions, &s.active_session_id);
+    save_settings(&s.settings.sessions, &s.active_session_id, &s.settings.shortcuts);
+
+    // Re-register shortcuts in case they changed.
+    register_shortcuts(&app, &shortcut_cfg);
 
     // Reset display if stopped.
     if !s.running {
@@ -960,6 +1039,7 @@ pub fn update_settings(
     }
     Ok(PomodoroSettings {
         sessions,
+        shortcuts: shortcut_cfg,
     })
 }
 
@@ -986,7 +1066,7 @@ pub fn switch_session(
         s.test_mode,
     );
 
-    save_settings(&s.settings.sessions, &s.active_session_id);
+    save_settings(&s.settings.sessions, &s.active_session_id, &s.settings.shortcuts);
 
     let tick = build_tick(&s);
     drop(s);
@@ -1147,6 +1227,7 @@ mod tests {
             play_minutes: None,
             play_break_minutes: None,
             session_type: None,
+            shortcuts: None,
         };
         let sessions = legacy_sessions(&file);
         assert_eq!(sessions.len(), 2);
@@ -1181,6 +1262,7 @@ mod tests {
             play_minutes: Some(45),
             play_break_minutes: Some(15),
             session_type: None,
+            shortcuts: None,
         };
         let sessions = legacy_sessions(&file);
         assert_eq!(sessions.len(), 2);
@@ -1198,6 +1280,7 @@ mod tests {
             play_minutes: None,
             play_break_minutes: None,
             session_type: None,
+            shortcuts: None,
         };
         let sessions = legacy_sessions(&file);
         assert_eq!(sessions.len(), 2);
@@ -1222,6 +1305,7 @@ mod tests {
                     SessionPart { name: "Rest".into(), minutes: 5, extendable: false, track_time: false },
                 ],
             }],
+            shortcuts: ShortcutConfig::default(),
         };
         let state = PomodoroState {
             active_session_id: session_id,
@@ -1257,6 +1341,7 @@ mod tests {
                     SessionPart { name: "W".into(), minutes: 1, extendable: true, track_time: false },
                 ],
             }],
+            shortcuts: ShortcutConfig::default(),
         };
         let state = PomodoroState {
             active_session_id: session_id,
@@ -1289,6 +1374,7 @@ mod tests {
                     SessionPart { name: "  ".into(), minutes: 10, extendable: false, track_time: false },
                 ],
             }],
+            shortcuts: ShortcutConfig::default(),
         };
         let state = PomodoroState {
             active_session_id: session_id,

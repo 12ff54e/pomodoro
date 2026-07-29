@@ -5,6 +5,7 @@ mod timer;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             let (settings, active_id) = timer::load_settings();
             let test_mode = std::env::var("POMODORO_TEST_MODE")
@@ -17,6 +18,7 @@ pub fn run() {
                 .unwrap_or(0);
             let remaining =
                 timer::minutes_to_seconds(settings.sessions[active_idx].parts[0].minutes, test_mode);
+            let shortcuts = settings.shortcuts.clone();
             let state = timer::PomodoroState {
                 active_session_id: active_id,
                 current_part_index: 0,
@@ -26,9 +28,14 @@ pub fn run() {
                 paused: false,
                 overtime_tracked_seconds: 0,
                 is_docked: false,
+                is_settings_open: false,
                 test_mode,
             };
             app.manage(std::sync::Mutex::new(state));
+
+            // Register global keyboard shortcuts from persisted config.
+            timer::register_shortcuts(app.app_handle(), &shortcuts);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -42,6 +49,7 @@ pub fn run() {
             timer::switch_session,
             timer::toggle_dock_mode,
             timer::get_dock_state,
+            timer::set_settings_open,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

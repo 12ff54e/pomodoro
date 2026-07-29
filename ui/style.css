@@ -229,6 +229,92 @@ body {
   margin-bottom: 0;
 }
 
+/* ---- Settings tabs ---- */
+.settings-tabs {
+  display: flex;
+  border-bottom: 1px solid #0f3460;
+  margin-bottom: 2px;
+}
+.settings-tab {
+  flex: 1;
+  padding: 8px 0;
+  border: none;
+  background: transparent;
+  color: #666;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.2s, border-color 0.2s;
+}
+.settings-tab:hover {
+  color: #aaa;
+}
+.settings-tab.active {
+  color: #16c79a;
+  border-bottom-color: #16c79a;
+}
+.tab-content.hidden {
+  display: none;
+}
+
+/* ---- Shortcut rows ---- */
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+}
+.shortcut-label {
+  width: 100px;
+  font-size: 0.85rem;
+  color: #ccc;
+  flex-shrink: 0;
+}
+.shortcut-key {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  background: #1a1a2e;
+  color: #16c79a;
+  font-size: 0.8rem;
+  font-family: 'Courier New', monospace;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  letter-spacing: 1px;
+}
+.shortcut-key:hover {
+  border-color: #16c79a;
+}
+.shortcut-key.recording {
+  border-color: #e94560;
+  color: #e94560;
+  animation: pulse-border 0.8s infinite alternate;
+}
+.shortcut-key.empty {
+  color: #555;
+  font-style: italic;
+}
+@keyframes pulse-border {
+  from { border-color: #e94560; }
+  to { border-color: #ff6b81; }
+}
+.btn-clear-shortcut {
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  transition: color 0.2s;
+  flex-shrink: 0;
+}
+.btn-clear-shortcut:hover {
+  color: #e94560;
+}
+
 /* ---- Session cards in settings ---- */
 .session-card {
   background: #1a1a2e;

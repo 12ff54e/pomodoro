@@ -204,6 +204,8 @@ function loadAppJs() {
         return null;
       case 'update_settings':
         return { sessions: args.sessions };
+      case 'set_settings_open':
+        return null;
       default:
         return null;
     }

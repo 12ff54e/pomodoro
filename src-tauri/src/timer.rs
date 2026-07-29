@@ -110,6 +110,9 @@ pub struct PomodoroState {
     pub overtime_tracked_seconds: u64,
     /// Whether the window is in dock mode (small, always-on-top, docked to top of screen).
     pub is_docked: bool,
+    /// Whether the settings overlay is open. When true, global shortcuts are
+    /// suppressed to avoid conflicts with shortcut recording.
+    pub is_settings_open: bool,
     /// When true, `part.minutes` is interpreted as seconds instead of minutes
     /// so that E2E tests complete in seconds rather than minutes.
     pub test_mode: bool,
@@ -966,13 +969,22 @@ pub fn register_shortcuts(app: &AppHandle, shortcuts: &ShortcutConfig) {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
     let _ = app.global_shortcut().unregister_all();
     register_one(app, &shortcuts.start, |app_handle| {
-        let _ = start_timer(app_handle.clone(), app_handle.state());
+        let blocked = app_handle.state::<Mutex<PomodoroState>>().lock().unwrap().is_settings_open;
+        if !blocked {
+            let _ = start_timer(app_handle.clone(), app_handle.state());
+        }
     });
     register_one(app, &shortcuts.stop, |app_handle| {
-        let _ = stop_timer(app_handle.clone(), app_handle.state());
+        let blocked = app_handle.state::<Mutex<PomodoroState>>().lock().unwrap().is_settings_open;
+        if !blocked {
+            let _ = stop_timer(app_handle.clone(), app_handle.state());
+        }
     });
     register_one(app, &shortcuts.continue_, |app_handle| {
-        let _ = continue_timer(app_handle.clone(), app_handle.state());
+        let blocked = app_handle.state::<Mutex<PomodoroState>>().lock().unwrap().is_settings_open;
+        if !blocked {
+            let _ = continue_timer(app_handle.clone(), app_handle.state());
+        }
     });
 }
 
@@ -1151,6 +1163,14 @@ pub fn get_dock_state(state: State<'_, Mutex<PomodoroState>>) -> bool {
     state.lock().unwrap().is_docked
 }
 
+/// Called by the frontend when the settings overlay opens or closes.
+/// Suppresses global shortcuts while settings are open so that recording
+/// new shortcut key combos doesn't accidentally trigger timer actions.
+#[tauri::command]
+pub fn set_settings_open(open: bool, state: State<'_, Mutex<PomodoroState>>) {
+    state.lock().unwrap().is_settings_open = open;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1317,6 +1337,7 @@ mod tests {
             overtime_tracked_seconds: 0,
             is_docked: false,
             test_mode: false,
+            is_settings_open: false,
         };
         let tick = build_tick(&state);
         assert_eq!(tick.remaining_seconds, 1500);
@@ -1353,6 +1374,7 @@ mod tests {
             overtime_tracked_seconds: 5,
             is_docked: false,
             test_mode: false,
+            is_settings_open: false,
         };
         let tick = build_tick(&state);
         assert_eq!(tick.remaining_seconds, -5);
@@ -1386,6 +1408,7 @@ mod tests {
             overtime_tracked_seconds: 0,
             is_docked: false,
             test_mode: false,
+            is_settings_open: false,
         };
         let tick = build_tick(&state);
         assert_eq!(tick.part_name, "Part 3");

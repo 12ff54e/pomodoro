@@ -28,6 +28,7 @@ pub fn run() {
                 paused: false,
                 overtime_tracked_seconds: 0,
                 is_docked: false,
+                is_settings_open: false,
                 test_mode,
             };
             app.manage(std::sync::Mutex::new(state));
@@ -48,6 +49,7 @@ pub fn run() {
             timer::switch_session,
             timer::toggle_dock_mode,
             timer::get_dock_state,
+            timer::set_settings_open,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

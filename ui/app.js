@@ -536,6 +536,7 @@ settingsBtn.addEventListener('click', () => {
   switchSettingsTab('sessions');
 
   overlay.classList.remove('hidden');
+  invoke('set_settings_open', { open: true }).catch(() => {});
 });
 
 // ---- Tab switching ----
@@ -554,8 +555,13 @@ function switchSettingsTab(tabName) {
   });
 }
 
-cancelBtn.addEventListener('click', () => {
+function closeSettings() {
   overlay.classList.add('hidden');
+  invoke('set_settings_open', { open: false }).catch(() => {});
+}
+
+cancelBtn.addEventListener('click', () => {
+  closeSettings();
 });
 
 addSessionBtn.addEventListener('click', () => {
@@ -600,7 +606,7 @@ saveBtn.addEventListener('click', async () => {
     if (newSettings.shortcuts) {
       shortcutConfig = newSettings.shortcuts;
     }
-    overlay.classList.add('hidden');
+    closeSettings();
   } catch (e) {
     console.error('update_settings failed:', e);
     alert('Failed to save: ' + e);
@@ -708,7 +714,7 @@ importBtn.addEventListener('click', async () => {
 // Close overlay on backdrop click.
 overlay.addEventListener('click', (e) => {
   if (e.target === overlay) {
-    overlay.classList.add('hidden');
+    closeSettings();
   }
 });
 

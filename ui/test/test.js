@@ -18,7 +18,7 @@ const vm = require('node:vm');
 /** All DOM element IDs that app.js references at load time. */
 const ALL_IDS = [
   'timer', 'phase', 'session-label', 'dock-btn',
-  'toggle-btn', 'continue-btn', 'session-left', 'session-right',
+  'toggle-btn', 'pause-btn', 'next-btn', 'session-left', 'session-right',
   'settings-btn', 'settings-overlay', 'sessions-container',
   'add-session-btn', 'export-settings', 'import-settings',
   'save-settings', 'cancel-settings',
@@ -100,8 +100,9 @@ function loadAppJs() {
   ALL_IDS.forEach(id => {
     elements[id] = el(id);
   });
-  // continue-btn starts with "hidden" class in the HTML.
-  elements['continue-btn'].classList._set.add('hidden');
+  // pause-btn and next-btn start with "hidden" class in the HTML.
+  elements['pause-btn'].classList._set.add('hidden');
+  elements['next-btn'].classList._set.add('hidden');
 
   // ---- Mock document ----
   const mockDocument = {
@@ -165,6 +166,7 @@ function loadAppJs() {
           partIndex: 0,
           running: false,
           paused: false,
+          manualPause: false,
           dailyTotalSeconds: 3600,
           activeSessionId: 'uuid-pomodoro-1',
           sessionCount: 2,
@@ -199,11 +201,14 @@ function loadAppJs() {
       case 'start_timer':
       case 'stop_timer':
       case 'continue_timer':
+      case 'pause_timer':
+      case 'resume_timer':
+      case 'next_part':
         return null;
       case 'switch_session':
         return null;
       case 'update_settings':
-        return { sessions: args.sessions };
+        return { sessions: args.sessions, shortcuts: args.shortcuts };
       case 'set_settings_open':
         return null;
       default:
@@ -278,6 +283,7 @@ function resetRenderState() {
   ctx.sandbox.wasRunning = false;
   ctx.sandbox.isRunning = false;
   ctx.sandbox.isPaused = false;
+  ctx.sandbox.isManualPause = false;
   ctx.sandbox.isDocked = false;
   ctx.sandbox.activeSessionId = 'uuid-pomodoro-1';
   ctx.sandbox.sessionIds = ['uuid-pomodoro-1', 'uuid-deep-focus-2'];
@@ -285,8 +291,10 @@ function resetRenderState() {
   ctx.elements['timer'].classList._set.clear();
   ctx.elements['toggle-btn'].classList._set.clear();
   ctx.elements['toggle-btn'].textContent = 'Start';
-  ctx.elements['continue-btn'].classList._set.clear();
-  ctx.elements['continue-btn'].classList._set.add('hidden');
+  ctx.elements['pause-btn'].classList._set.clear();
+  ctx.elements['pause-btn'].classList._set.add('hidden');
+  ctx.elements['next-btn'].classList._set.clear();
+  ctx.elements['next-btn'].classList._set.add('hidden');
 }
 
 // ============================== formatTime ==============================
@@ -475,22 +483,7 @@ describe('render', () => {
     assert.ok(!ctx.elements['timer'].classList._set.has('overtime'));
   });
 
-  it('shows Continue button when paused', () => {
-    ctx.sandbox.render({
-      remainingSeconds: -10,
-      sessionName: 'Pomodoro',
-      partName: 'Work',
-      partIndex: 0,
-      running: true,
-      paused: true,
-      dailyTotalSeconds: 0,
-      activeSessionId: 'uuid-1',
-      sessionCount: 1,
-    });
-    assert.ok(!ctx.elements['continue-btn'].classList._set.has('hidden'));
-  });
-
-  it('hides Continue button when not paused', () => {
+  it('shows Pause and Next buttons when running', () => {
     ctx.sandbox.render({
       remainingSeconds: 1500,
       sessionName: 'Pomodoro',
@@ -498,11 +491,48 @@ describe('render', () => {
       partIndex: 0,
       running: true,
       paused: false,
+      manualPause: false,
       dailyTotalSeconds: 0,
       activeSessionId: 'uuid-1',
       sessionCount: 1,
     });
-    assert.ok(ctx.elements['continue-btn'].classList._set.has('hidden'));
+    assert.ok(!ctx.elements['pause-btn'].classList._set.has('hidden'));
+    assert.equal(ctx.elements['pause-btn'].textContent, 'Pause');
+    assert.ok(!ctx.elements['next-btn'].classList._set.has('hidden'));
+  });
+
+  it('shows Continue on pause button when manually paused', () => {
+    ctx.sandbox.render({
+      remainingSeconds: 500,
+      sessionName: 'Pomodoro',
+      partName: 'Work',
+      partIndex: 0,
+      running: true,
+      paused: false,
+      manualPause: true,
+      dailyTotalSeconds: 0,
+      activeSessionId: 'uuid-1',
+      sessionCount: 1,
+    });
+    assert.ok(!ctx.elements['pause-btn'].classList._set.has('hidden'));
+    assert.equal(ctx.elements['pause-btn'].textContent, 'Continue');
+  });
+
+  it('hides Pause and Next buttons when stopped', () => {
+    ctx.sandbox.render({
+      remainingSeconds: 1500,
+      sessionName: 'Pomodoro',
+      partName: 'Work',
+      partIndex: 0,
+      running: false,
+      paused: false,
+      manualPause: false,
+      dailyTotalSeconds: 0,
+      activeSessionId: 'uuid-1',
+      sessionCount: 1,
+    });
+    assert.ok(ctx.elements['pause-btn'].classList._set.has('hidden'));
+    assert.ok(ctx.elements['next-btn'].classList._set.has('hidden'));
   });
 
   it('shows "Stop" text and is-running class when timer is running', () => {
@@ -581,8 +611,9 @@ describe('render', () => {
       partName: 'Focus',
       running: true,
       paused: false,
+      manualPause: false,
       dailyTotalSeconds: 100,
-      activeSessionIndex: 1,
+      activeSessionId: 'uuid-1',
       sessionCount: 3,
     });
     // Verify through DOM effects rather than let bindings
@@ -592,7 +623,9 @@ describe('render', () => {
     assert.equal(ctx.elements['session-label'].textContent, 'Deep Focus');
     assert.equal(ctx.elements['toggle-btn'].textContent, 'Stop');
     assert.ok(ctx.elements['toggle-btn'].classList._set.has('is-running'));
-    assert.ok(ctx.elements['continue-btn'].classList._set.has('hidden'));
+    // Buttons visible when running.
+    assert.ok(!ctx.elements['pause-btn'].classList._set.has('hidden'));
+    assert.ok(!ctx.elements['next-btn'].classList._set.has('hidden'));
   });
 });
 
@@ -765,11 +798,11 @@ describe('session switcher', () => {
 // ==================== Keyboard shortcut logic ==========================
 
 describe('keyboard shortcuts', () => {
-  it('Space/Enter triggers continue when not docked and paused', () => {
+  it('Space/Enter triggers next part when not docked and running', () => {
     const should = !false && true && (' ' === ' ' || ' ' === 'Enter');
     assert.ok(should);
   });
-  it('Space does not trigger continue when docked', () => {
+  it('Space does not trigger next part when docked', () => {
     const should = !true && true && (' ' === ' ' || ' ' === 'Enter');
     assert.ok(!should);
   });
@@ -818,6 +851,7 @@ describe('timer-tick listener', () => {
         partIndex: 0,
         running: true,
         paused: false,
+        manualPause: false,
         dailyTotalSeconds: 7200,
         activeSessionId: 'uuid-1',
         sessionCount: 1,

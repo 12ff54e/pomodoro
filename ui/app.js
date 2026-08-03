@@ -8,10 +8,11 @@ let sessionCount = 1;
 let sessionIds = [];
 let isRunning = false;
 let isPaused = false;
+let isManualPause = false;
 let wasRunning = false;
 let lastPartName = '';
 let isDocked = false;
-let shortcutConfig = { start: 'CmdOrCtrl+Shift+S', stop: 'CmdOrCtrl+Shift+X', continue: 'CmdOrCtrl+Shift+C' };
+let shortcutConfig = { toggle: 'CmdOrCtrl+Shift+S', pause: '', nextPart: 'CmdOrCtrl+Shift+C' };
 
 // ---- Audio context (lazy, created on first beep) ----
 let audioCtx = null;
@@ -47,7 +48,8 @@ const phaseEl = document.getElementById('phase');
 const sessionLabelEl = document.getElementById('session-label');
 const dockBtn = document.getElementById('dock-btn');
 const toggleBtn = document.getElementById('toggle-btn');
-const continueBtn = document.getElementById('continue-btn');
+const pauseBtn = document.getElementById('pause-btn');
+const nextBtn = document.getElementById('next-btn');
 const sessionLeftBtn = document.getElementById('session-left');
 const sessionRightBtn = document.getElementById('session-right');
 const settingsBtn = document.getElementById('settings-btn');
@@ -112,6 +114,7 @@ function render(tick) {
   sessionCount = tick.sessionCount;
   isRunning = tick.running;
   isPaused = tick.paused;
+  isManualPause = tick.manualPause;
 
   timerEl.textContent = formatTime(tick.remainingSeconds);
 
@@ -126,19 +129,26 @@ function render(tick) {
   phaseEl.className = phaseClass(tick.partIndex);
   sessionLabelEl.textContent = tick.sessionName;
 
-  // Show/hide Continue button based on paused state.
-  if (tick.paused) {
-    continueBtn.classList.remove('hidden');
-  } else {
-    continueBtn.classList.add('hidden');
-  }
-
+  // ---- Button visibility ----
   if (tick.running) {
     toggleBtn.textContent = 'Stop';
     toggleBtn.classList.add('is-running');
+
+    // Pause/Continue button: visible whenever running.
+    pauseBtn.classList.remove('hidden');
+    if (tick.manualPause) {
+      pauseBtn.textContent = 'Continue';
+    } else {
+      pauseBtn.textContent = 'Pause';
+    }
+
+    // Next Part button: visible whenever running.
+    nextBtn.classList.remove('hidden');
   } else {
     toggleBtn.textContent = 'Start';
     toggleBtn.classList.remove('is-running');
+    pauseBtn.classList.add('hidden');
+    nextBtn.classList.add('hidden');
   }
 
   if (tick.dailyTotalSeconds !== undefined) {
@@ -195,12 +205,25 @@ toggleBtn.addEventListener('click', async () => {
   }
 });
 
-// ---- Continue button ----
-continueBtn.addEventListener('click', async () => {
+// ---- Pause / Continue button ----
+pauseBtn.addEventListener('click', async () => {
   try {
-    await invoke('continue_timer');
+    if (isManualPause) {
+      await invoke('resume_timer');
+    } else {
+      await invoke('pause_timer');
+    }
   } catch (e) {
-    console.error('continue_timer failed:', e);
+    console.error('pause/resume failed:', e);
+  }
+});
+
+// ---- Next Part button ----
+nextBtn.addEventListener('click', async () => {
+  try {
+    await invoke('next_part');
+  } catch (e) {
+    console.error('next_part failed:', e);
   }
 });
 
@@ -239,10 +262,10 @@ document.addEventListener('keydown', async (e) => {
     return;
   }
 
-  // Space/Enter to continue when paused (overtime) — not in dock mode.
-  if (!isDocked && isPaused && (e.key === ' ' || e.key === 'Enter')) {
+  // Space/Enter to advance to next part when running — not in dock mode.
+  if (!isDocked && isRunning && (e.key === ' ' || e.key === 'Enter')) {
     e.preventDefault();
-    try { await invoke('continue_timer'); } catch (_) {}
+    try { await invoke('next_part'); } catch (_) {}
     return;
   }
 
@@ -408,9 +431,9 @@ function buildShortcutsForm(editShortcuts) {
   const display = (s) => s ? s.replace(/^CmdOrCtrl/, 'Ctrl/Cmd').replace(/Key|Digit/g, '') : '';
 
   const actions = [
-    { key: 'start', label: 'Start Timer' },
-    { key: 'stop', label: 'Stop Timer' },
-    { key: 'continue', label: 'Continue' },
+    { key: 'toggle', label: 'Toggle Start/Stop' },
+    { key: 'pause', label: 'Toggle Pause/Resume' },
+    { key: 'nextPart', label: 'Next Part' },
   ];
 
   actions.forEach(({ key, label }) => {
@@ -528,9 +551,9 @@ settingsBtn.addEventListener('click', () => {
 
   // Deep-clone shortcuts for editing.
   const editShortcuts = {
-    start: shortcutConfig.start || '',
-    stop: shortcutConfig.stop || '',
-    continue: shortcutConfig.continue || '',
+    toggle: shortcutConfig.toggle || '',
+    pause: shortcutConfig.pause || '',
+    nextPart: shortcutConfig.nextPart || '',
   };
   buildShortcutsForm(editShortcuts);
 
@@ -601,9 +624,9 @@ saveBtn.addEventListener('click', async () => {
       sessions: edit,
       shortcuts: editShortcuts
         ? {
-            start: editShortcuts.start,
-            stop: editShortcuts.stop,
-            continue: editShortcuts.continue,
+            toggle: editShortcuts.toggle,
+            pause: editShortcuts.pause,
+            next_part: editShortcuts.nextPart,
           }
         : undefined,
     });

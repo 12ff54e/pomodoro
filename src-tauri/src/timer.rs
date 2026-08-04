@@ -779,6 +779,7 @@ pub fn start_timer(
     let test_mode = s.test_mode;
     s.running = true;
     s.paused = false;
+    s.manual_pause = false;
     s.overtime_tracked_seconds = 0;
 
     // Emit an initial tick immediately so the frontend reflects the new
@@ -933,6 +934,7 @@ pub fn stop_timer(
 
     s.running = false;
     s.paused = false;
+    s.manual_pause = false;
     s.overtime_tracked_seconds = 0;
     s.current_part_index = 0;
     let idx = find_session_index(&s.settings.sessions, &s.active_session_id).unwrap_or(0);
@@ -1067,12 +1069,14 @@ pub fn next_part(
     };
 
     // Advance to next part (or stop if last).
+    let was_manual_pause = s.manual_pause;
     let adv = continue_advance(s.current_part_index, &part_seconds, first_seconds);
     s.current_part_index = adv.new_part_index;
     s.remaining_seconds = adv.new_remaining_seconds;
     s.running = adv.new_running;
     s.paused = adv.new_paused;
-    s.manual_pause = false;
+    // Preserve manual pause if advancing within the session; clear if stopping.
+    s.manual_pause = was_manual_pause && adv.new_running;
     s.overtime_tracked_seconds = 0;
 
     let tick = build_tick(&s);

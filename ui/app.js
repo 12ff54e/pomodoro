@@ -221,6 +221,8 @@ toggleBtn.addEventListener('click', async () => {
 // ---- Pause / Continue button ----
 pauseBtn.addEventListener('click', async () => {
   try {
+    // Short double beep for feedback on pause or resume.
+    beep(440, 100, 2);
     if (isManualPause) {
       await invoke('resume_timer');
     } else {

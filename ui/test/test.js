@@ -164,6 +164,7 @@ function loadAppJs() {
           sessionName: 'Pomodoro',
           partName: 'Work',
           partIndex: 0,
+          partCount: 2,
           running: false,
           paused: false,
           manualPause: false,
@@ -284,6 +285,9 @@ function resetRenderState() {
   ctx.sandbox.isRunning = false;
   ctx.sandbox.isPaused = false;
   ctx.sandbox.isManualPause = false;
+  ctx.sandbox.skipNextBeep = false;
+  ctx.sandbox.partCount = 2;
+  ctx.sandbox.currentPartIndex = 0;
   ctx.sandbox.isDocked = false;
   ctx.sandbox.activeSessionId = 'uuid-pomodoro-1';
   ctx.sandbox.sessionIds = ['uuid-pomodoro-1', 'uuid-deep-focus-2'];
@@ -492,6 +496,7 @@ describe('render', () => {
       running: true,
       paused: false,
       manualPause: false,
+      partCount: 2,
       dailyTotalSeconds: 0,
       activeSessionId: 'uuid-1',
       sessionCount: 1,
@@ -507,6 +512,7 @@ describe('render', () => {
       sessionName: 'Pomodoro',
       partName: 'Work',
       partIndex: 0,
+      partCount: 2,
       running: true,
       paused: false,
       manualPause: true,
@@ -524,6 +530,7 @@ describe('render', () => {
       sessionName: 'Pomodoro',
       partName: 'Work',
       partIndex: 0,
+      partCount: 2,
       running: false,
       paused: false,
       manualPause: false,

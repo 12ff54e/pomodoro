@@ -9,6 +9,8 @@ let sessionIds = [];
 let isRunning = false;
 let isPaused = false;
 let isManualPause = false;
+let partCount = 1;
+let skipNextBeep = false;
 let wasRunning = false;
 let lastPartName = '';
 let isDocked = false;
@@ -86,18 +88,24 @@ function phaseClass(partIndex) {
   return 'phase-part-' + (partIndex % PART_COLORS);
 }
 
+function isLastPart() {
+  return currentPartIndex >= partCount - 1;
+}
+
 function render(tick) {
   // Beep on timer-driven transitions only (not manual switches or startup).
   const partChanged = tick.partName !== lastPartName;
+  const wasSkip = skipNextBeep;
+  skipNextBeep = false;
   if (tick.running && !wasRunning) {
     // Session started (user clicked Start) — single long beep.
     beep(660, 600, 1);
   } else if (partChanged && tick.running && !tick.paused && !isPaused) {
-    // Timer auto-advanced to the next part — short triple beep.
-    beep(880, 150, 3);
+    // Timer auto-advanced to the next part — short triple beep (suppressed on manual skip).
+    if (!wasSkip) beep(880, 150, 3);
   } else if (partChanged && !tick.running && wasRunning) {
-    // Session finished (last part ended, timer stopped) — single long beep.
-    beep(660, 600, 1);
+    // Session finished (last part ended, timer stopped) — single long beep (suppressed on manual skip).
+    if (!wasSkip) beep(660, 600, 1);
   } else if (tick.paused && !isPaused) {
     // Just entered overtime — same triple beep as normal transitions.
     beep(880, 150, 3);
@@ -115,6 +123,7 @@ function render(tick) {
   isRunning = tick.running;
   isPaused = tick.paused;
   isManualPause = tick.manualPause;
+  partCount = tick.partCount || 1;
 
   timerEl.textContent = formatTime(tick.remainingSeconds);
 
@@ -142,8 +151,12 @@ function render(tick) {
       pauseBtn.textContent = 'Pause';
     }
 
-    // Next Part button: visible whenever running.
-    nextBtn.classList.remove('hidden');
+    // Next Part button: visible when running and not on last part.
+    if (isLastPart()) {
+      nextBtn.classList.add('hidden');
+    } else {
+      nextBtn.classList.remove('hidden');
+    }
   } else {
     toggleBtn.textContent = 'Start';
     toggleBtn.classList.remove('is-running');
@@ -221,8 +234,10 @@ pauseBtn.addEventListener('click', async () => {
 // ---- Next Part button ----
 nextBtn.addEventListener('click', async () => {
   try {
+    skipNextBeep = true;
     await invoke('next_part');
   } catch (e) {
+    skipNextBeep = false;
     console.error('next_part failed:', e);
   }
 });

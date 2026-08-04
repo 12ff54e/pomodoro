@@ -30,20 +30,29 @@ pub struct Session {
     pub parts: Vec<SessionPart>,
 }
 
+fn default_toggle_shortcut() -> String {
+    "CmdOrCtrl+Shift+S".into()
+}
+fn default_next_part_shortcut() -> String {
+    "CmdOrCtrl+Shift+C".into()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShortcutConfig {
-    pub start: String,
-    pub stop: String,
-    #[serde(rename = "continue")]
-    pub continue_: String,
+    #[serde(default = "default_toggle_shortcut")]
+    pub toggle: String,
+    #[serde(default)]
+    pub pause: String,
+    #[serde(default = "default_next_part_shortcut")]
+    pub next_part: String,
 }
 
 impl Default for ShortcutConfig {
     fn default() -> Self {
         Self {
-            start: "CmdOrCtrl+Shift+S".into(),
-            stop: "CmdOrCtrl+Shift+X".into(),
-            continue_: "CmdOrCtrl+Shift+C".into(),
+            toggle: default_toggle_shortcut(),
+            pause: String::new(),
+            next_part: default_next_part_shortcut(),
         }
     }
 }
@@ -88,8 +97,10 @@ pub struct TimerTick {
     pub session_name: String,
     pub part_name: String,
     pub part_index: usize,
+    pub part_count: usize,
     pub running: bool,
     pub paused: bool,
+    pub manual_pause: bool,
     pub daily_total_seconds: u64,
     pub active_session_id: String,
     pub session_count: usize,
@@ -104,6 +115,9 @@ pub struct PomodoroState {
     pub settings: PomodoroSettings,
     pub running: bool,
     pub paused: bool,
+    /// True when the user manually paused the timer (countdown frozen).
+    /// Distinct from `paused` (overtime). The two can coexist.
+    pub manual_pause: bool,
     /// Accumulated tracked overtime seconds for the current part
     /// (flushed on Continue/Stop). Only increments when the part has
     /// `track_time` enabled.
@@ -166,9 +180,9 @@ struct SettingsFile {
     #[serde(rename = "sessionType")]
     session_type: Option<String>,
 
-    // Shortcuts config (new format).
+    // Shortcuts config (new or old format — migrated in settings_from_file).
     #[serde(default)]
-    shortcuts: Option<ShortcutConfig>,
+    shortcuts: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -304,9 +318,9 @@ fn save_settings(sessions: &[Session], active_id: &str, shortcuts: &ShortcutConf
         "sessions": defs,
         "activeSessionId": active_id,
         "shortcuts": {
-            "start": shortcuts.start,
-            "stop": shortcuts.stop,
-            "continue": shortcuts.continue_,
+            "toggle": shortcuts.toggle,
+            "pause": shortcuts.pause,
+            "nextPart": shortcuts.next_part,
         },
     });
     if let Ok(json) = serde_json::to_string_pretty(&file) {
@@ -433,6 +447,35 @@ fn find_session_index(sessions: &[Session], id: &str) -> Option<usize> {
     sessions.iter().position(|s| s.id == id)
 }
 
+/// Migrate shortcut config from old `{start, stop, continue}` format to
+/// new `{toggle, pause, nextPart}` format.  Old `start` maps to `toggle`,
+/// old `continue` maps to `nextPart`.  Old `stop` is discarded.
+fn migrate_shortcuts(raw: Option<&serde_json::Value>) -> ShortcutConfig {
+    let Some(val) = raw else {
+        return ShortcutConfig::default();
+    };
+    // Try new format first.
+    if let Ok(cfg) = serde_json::from_value::<ShortcutConfig>(val.clone()) {
+        return cfg;
+    }
+    // Old format: { start, stop, continue }.
+    let toggle = val
+        .get("start")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_else(default_toggle_shortcut);
+    let next_part = val
+        .get("continue")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_else(default_next_part_shortcut);
+    ShortcutConfig {
+        toggle,
+        pause: String::new(),
+        next_part,
+    }
+}
+
 /// Convert a parsed settings file into domain model + active session UUID.
 /// Extracted for testability — test the three-branch logic without touching disk.
 fn settings_from_file(file: SettingsFile) -> (PomodoroSettings, String) {
@@ -481,13 +524,13 @@ fn settings_from_file(file: SettingsFile) -> (PomodoroSettings, String) {
             _ => sessions.first().map(|s| s.id.clone()).unwrap_or_default(),
         };
 
-        let shortcuts = file.shortcuts.unwrap_or_default();
+        let shortcuts = migrate_shortcuts(file.shortcuts.as_ref());
         (PomodoroSettings { sessions, shortcuts }, active_id)
     } else if file.work_minutes.is_some() || file.play_minutes.is_some() {
         // Old format — migrate from legacy fields.
         let sessions = legacy_sessions(&file);
         let active_id = sessions[0].id.clone();
-        let shortcuts = file.shortcuts.unwrap_or_default();
+        let shortcuts = migrate_shortcuts(file.shortcuts.as_ref());
         (PomodoroSettings { sessions, shortcuts }, active_id)
     } else {
         // No file yet — use defaults.
@@ -593,12 +636,15 @@ fn build_tick(state: &PomodoroState) -> TimerTick {
         session_name: session.name.clone(),
         part_name,
         part_index: state.current_part_index,
+        part_count: session.parts.len(),
         running: state.running,
         paused: state.paused,
+        manual_pause: state.manual_pause,
         daily_total_seconds: daily,
         active_session_id: state.active_session_id.clone(),
         session_count: state.settings.sessions.len(),
     }
+
 }
 
 /// Validate sessions for update_settings. Extracted for testability.
@@ -733,6 +779,7 @@ pub fn start_timer(
     let test_mode = s.test_mode;
     s.running = true;
     s.paused = false;
+    s.manual_pause = false;
     s.overtime_tracked_seconds = 0;
 
     // Emit an initial tick immediately so the frontend reflects the new
@@ -767,37 +814,39 @@ pub fn start_timer(
                 if !s.running {
                     break;
                 }
-                if s.remaining_seconds > 0 {
-                    s.remaining_seconds -= 1;
-                }
-                if s.remaining_seconds == 0 && !s.paused {
-                    // Timer just reached zero.
-                    let idx = s.current_part_index;
-                    if part_extendable[idx] {
-                        // Extendable part — enter paused overtime mode.
-                        s.paused = true;
-                    } else if idx + 1 < part_seconds.len() {
-                        // Advance to next part.
-                        s.current_part_index += 1;
-                        s.remaining_seconds = part_seconds[s.current_part_index];
-                    } else {
-                        // Last part finished — stop and reset.
-                        s.running = false;
-                        s.current_part_index = 0;
-                        s.remaining_seconds = part_seconds[0];
-                        phase_ended = true;
+                if !s.manual_pause {
+                    if s.remaining_seconds > 0 {
+                        s.remaining_seconds -= 1;
                     }
+                    if s.remaining_seconds == 0 && !s.paused {
+                        // Timer just reached zero.
+                        let idx = s.current_part_index;
+                        if part_extendable[idx] {
+                            // Extendable part — enter paused overtime mode.
+                            s.paused = true;
+                        } else if idx + 1 < part_seconds.len() {
+                            // Advance to next part.
+                            s.current_part_index += 1;
+                            s.remaining_seconds = part_seconds[s.current_part_index];
+                        } else {
+                            // Last part finished — stop and reset.
+                            s.running = false;
+                            s.current_part_index = 0;
+                            s.remaining_seconds = part_seconds[0];
+                            phase_ended = true;
+                        }
 
-                    // Record the completed part duration if tracking is enabled.
-                    if part_track_time[idx] {
-                        tracked_completed = Some(part_seconds[idx].max(0) as u64);
-                        completed_part_index = Some(idx);
-                    }
-                } else if s.paused {
-                    // Overtime: keep decrementing into negative.
-                    s.remaining_seconds -= 1;
-                    if part_track_time[s.current_part_index] {
-                        s.overtime_tracked_seconds += 1;
+                        // Record the completed part duration if tracking is enabled.
+                        if part_track_time[idx] {
+                            tracked_completed = Some(part_seconds[idx].max(0) as u64);
+                            completed_part_index = Some(idx);
+                        }
+                    } else if s.paused {
+                        // Overtime: keep decrementing into negative.
+                        s.remaining_seconds -= 1;
+                        if part_track_time[s.current_part_index] {
+                            s.overtime_tracked_seconds += 1;
+                        }
                     }
                 }
                 // Resolve session for display.
@@ -816,8 +865,10 @@ pub fn start_timer(
                     session_name: session.name.clone(),
                     part_name,
                     part_index: s.current_part_index,
+                    part_count: part_seconds.len(),
                     running: s.running,
                     paused: s.paused,
+                    manual_pause: s.manual_pause,
                     daily_total_seconds: 0,
                     active_session_id: s.active_session_id.clone(),
                     session_count: sessions.len(),
@@ -883,6 +934,7 @@ pub fn stop_timer(
 
     s.running = false;
     s.paused = false;
+    s.manual_pause = false;
     s.overtime_tracked_seconds = 0;
     s.current_part_index = 0;
     let idx = find_session_index(&s.settings.sessions, &s.active_session_id).unwrap_or(0);
@@ -940,6 +992,104 @@ pub fn continue_timer(
     Ok(())
 }
 
+#[tauri::command]
+pub fn pause_timer(
+    app: AppHandle,
+    state: State<'_, Mutex<PomodoroState>>,
+) -> Result<(), String> {
+    let mut s = state.lock().unwrap();
+    if !s.running {
+        return Err("Timer is not running".into());
+    }
+    if s.manual_pause {
+        return Err("Timer is already paused".into());
+    }
+    s.manual_pause = true;
+    let tick = build_tick(&s);
+    drop(s);
+    let _ = app.emit("timer-tick", &tick);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn resume_timer(
+    app: AppHandle,
+    state: State<'_, Mutex<PomodoroState>>,
+) -> Result<(), String> {
+    let mut s = state.lock().unwrap();
+    if !s.running {
+        return Err("Timer is not running".into());
+    }
+    if !s.manual_pause {
+        return Err("Timer is not paused".into());
+    }
+    s.manual_pause = false;
+    let tick = build_tick(&s);
+    drop(s);
+    let _ = app.emit("timer-tick", &tick);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn next_part(
+    app: AppHandle,
+    state: State<'_, Mutex<PomodoroState>>,
+) -> Result<(), String> {
+    let mut s = state.lock().unwrap();
+    if !s.running {
+        return Err("Timer is not running".into());
+    }
+
+    let idx = find_session_index(&s.settings.sessions, &s.active_session_id).unwrap_or(0);
+    let part_seconds: Vec<i64> = s.settings.sessions[idx]
+        .parts
+        .iter()
+        .map(|p| minutes_to_seconds(p.minutes, s.test_mode))
+        .collect();
+    let first_seconds = part_seconds[0];
+    let session_id = s.active_session_id.clone();
+    let session_name = s.settings.sessions[idx].name.clone();
+    let part_index = s.current_part_index;
+    let part_name = s.settings.sessions[idx].parts[part_index].name.clone();
+    let track_time = s.settings.sessions[idx].parts[part_index].track_time;
+    let full_seconds = part_seconds[part_index].max(0) as u64;
+
+    // Determine how many tracked seconds to record.
+    let tracked: Option<u64> = if !track_time {
+        None
+    } else if s.paused {
+        // Overtime: flush accumulated overtime seconds.
+        let ot = s.overtime_tracked_seconds;
+        if ot > 0 { Some(ot) } else { None }
+    } else {
+        // Mid-timer (including manual pause): record elapsed time.
+        let remaining = s.remaining_seconds.max(0) as u64;
+        let elapsed = full_seconds.saturating_sub(remaining);
+        if elapsed > 0 { Some(elapsed) } else { None }
+    };
+
+    // Advance to next part (or stop if last).
+    let was_manual_pause = s.manual_pause;
+    let adv = continue_advance(s.current_part_index, &part_seconds, first_seconds);
+    s.current_part_index = adv.new_part_index;
+    s.remaining_seconds = adv.new_remaining_seconds;
+    s.running = adv.new_running;
+    s.paused = adv.new_paused;
+    // Preserve manual pause if advancing within the session; clear if stopping.
+    s.manual_pause = was_manual_pause && adv.new_running;
+    s.overtime_tracked_seconds = 0;
+
+    let tick = build_tick(&s);
+    drop(s);
+
+    if let Some(secs) = tracked {
+        add_record_seconds(&session_id, &session_name, part_index, &part_name, secs);
+    }
+
+    let _ = app.emit("timer-tick", &tick);
+    Ok(())
+}
+
 /// Register a single global shortcut with the given handler.
 /// Silently ignores empty strings and parse/registration errors.
 fn register_one<F>(app: &AppHandle, s: &str, handler: F)
@@ -968,23 +1118,36 @@ where
 pub fn register_shortcuts(app: &AppHandle, shortcuts: &ShortcutConfig) {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
     let _ = app.global_shortcut().unregister_all();
-    register_one(app, &shortcuts.start, |app_handle| {
+
+    // Toggle: start if stopped, stop if running.
+    register_one(app, &shortcuts.toggle, |app_handle| {
         let blocked = app_handle.state::<Mutex<PomodoroState>>().lock().unwrap().is_settings_open;
-        if !blocked {
+        if blocked { return; }
+        let running = app_handle.state::<Mutex<PomodoroState>>().lock().unwrap().running;
+        if running {
+            let _ = stop_timer(app_handle.clone(), app_handle.state());
+        } else {
             let _ = start_timer(app_handle.clone(), app_handle.state());
         }
     });
-    register_one(app, &shortcuts.stop, |app_handle| {
+
+    // Pause: toggle between pause and resume.
+    register_one(app, &shortcuts.pause, |app_handle| {
         let blocked = app_handle.state::<Mutex<PomodoroState>>().lock().unwrap().is_settings_open;
-        if !blocked {
-            let _ = stop_timer(app_handle.clone(), app_handle.state());
+        if blocked { return; }
+        let mp = app_handle.state::<Mutex<PomodoroState>>().lock().unwrap().manual_pause;
+        if mp {
+            let _ = resume_timer(app_handle.clone(), app_handle.state());
+        } else {
+            let _ = pause_timer(app_handle.clone(), app_handle.state());
         }
     });
-    register_one(app, &shortcuts.continue_, |app_handle| {
+
+    // Next part: advance to next part.
+    register_one(app, &shortcuts.next_part, |app_handle| {
         let blocked = app_handle.state::<Mutex<PomodoroState>>().lock().unwrap().is_settings_open;
-        if !blocked {
-            let _ = continue_timer(app_handle.clone(), app_handle.state());
-        }
+        if blocked { return; }
+        let _ = next_part(app_handle.clone(), app_handle.state());
     });
 }
 
@@ -1334,6 +1497,7 @@ mod tests {
             settings,
             running: true,
             paused: false,
+            manual_pause: false,
             overtime_tracked_seconds: 0,
             is_docked: false,
             test_mode: false,
@@ -1371,6 +1535,7 @@ mod tests {
             settings,
             running: true,
             paused: true,
+            manual_pause: false,
             overtime_tracked_seconds: 5,
             is_docked: false,
             test_mode: false,
@@ -1405,6 +1570,7 @@ mod tests {
             settings,
             running: false,
             paused: false,
+            manual_pause: false,
             overtime_tracked_seconds: 0,
             is_docked: false,
             test_mode: false,

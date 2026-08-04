@@ -30,7 +30,7 @@ Two test suites — run both before tagging a release:
 # 1. Rust unit tests (49 tests — state logic, date math, serialization, validation)
 cd src-tauri && cargo test
 
-# 2. UI tests (59 tests — runs app.js in a Node.js vm sandbox with mocked
+# 2. UI tests (60 tests — runs app.js in a Node.js vm sandbox with mocked
 #    DOM, Tauri API, AudioContext, and navigator.clipboard; no npm install
 #    needed, Node 18+)
 node ui/test/test.js
@@ -88,20 +88,23 @@ Pomodoro desktop clock built with Rust + Tauri v2. Vanilla HTML/CSS/JS frontend 
 | `lib.rs`   | App builder: registers `tauri-plugin-global-shortcut`, loads persisted settings in `setup`, manages `Mutex<PomodoroState>`, registers commands |
 | `timer.rs` | State structs, Tauri commands, background timer thread                                                                               |
 
-**State model** (`PomodoroState`): `active_session_id` (UUID string), `current_part_index`, `remaining_seconds` (i64 — negative during overtime), `settings` (PomodoroSettings, includes `sessions` and `shortcuts`), `running` flag, `paused` flag (overtime waiting for user), `overtime_tracked_seconds`, `is_docked` flag (window is in compact always-on-top mode), `is_settings_open` flag (suppresses global shortcuts when true). Wrapped in `Mutex<PomodoroState>` managed by Tauri.
+**State model** (`PomodoroState`): `active_session_id` (UUID string), `current_part_index`, `remaining_seconds` (i64 — negative during overtime), `settings` (PomodoroSettings, includes `sessions` and `shortcuts`), `running` flag, `paused` flag (overtime waiting for user), `manual_pause` flag (user paused mid-countdown; timer frozen; can coexist with `paused` for pausing during overtime), `overtime_tracked_seconds`, `is_docked` flag (window is in compact always-on-top mode), `is_settings_open` flag (suppresses global shortcuts when true). Wrapped in `Mutex<PomodoroState>` managed by Tauri.
 
 **Data model:** Each `Session` has a stable `id` (UUID v4), a `name`, and a list of `SessionPart`s. Each part has an optional `name` (falls back to "Part N"), `minutes` (1–120), `extendable` (bool — when true, the timer enters paused overtime at 0 instead of auto-advancing), and `track_time` (bool — when true, seconds spent on this part are recorded to the daily log). Sessions are identified by UUID everywhere (not array index). Settings are persisted as JSON next to the executable (`pomodoro.json`). Detailed time records are tracked in `pomodoro_record.json` (date → session UUID → part index → accumulated seconds).
 
-**Shortcut config** (`ShortcutConfig`): stored as part of `PomodoroSettings` in `pomodoro.json`. Contains `start`, `stop`, and `continue` fields — each a shortcut string like `CmdOrCtrl+Shift+KeyS` (internal format matches the `tauri-plugin-global-shortcut` `Code` enum). Default shortcuts: `CmdOrCtrl+Shift+KeyS` (Start), `CmdOrCtrl+Shift+KeyX` (Stop), `CmdOrCtrl+Shift+KeyC` (Continue). Shortcuts are registered at startup via `register_shortcuts()` and re-registered on settings save via `update_settings`. The `register_one()` helper silently ignores empty strings and parse failures, so clearing a shortcut disables it. Global shortcuts are suppressed while the settings overlay is open (`is_settings_open` flag) to avoid conflicts with shortcut recording.
+**Shortcut config** (`ShortcutConfig`): stored as part of `PomodoroSettings` in `pomodoro.json`. Contains `toggle`, `pause`, and `next_part` fields — each a shortcut string like `CmdOrCtrl+Shift+KeyS` (internal format matches the `tauri-plugin-global-shortcut` `Code` enum). Default shortcuts: `CmdOrCtrl+Shift+KeyS` (Toggle Start/Stop — checks state and calls start or stop), `""` (Pause/Resume — disabled by default), `CmdOrCtrl+Shift+KeyC` (Next Part). Old format `{start, stop, continue}` is migrated to `{toggle, pause, nextPart}` automatically. Shortcuts are registered at startup via `register_shortcuts()` and re-registered on settings save via `update_settings`. The `register_one()` helper silently ignores empty strings and parse failures, so clearing a shortcut disables it. Global shortcuts are suppressed while the settings overlay is open (`is_settings_open` flag) to avoid conflicts with shortcut recording.
 
 **Commands:**
 
 - `get_state` — returns `TimerTick` snapshot (includes `active_session_id`, `part_index`)
 - `get_daily_total` — returns today's total tracked seconds for the current session (or all sessions when no `session_id` is passed)
 - `get_settings` — returns current `PomodoroSettings` (includes `sessions` and `shortcuts`)
-- `start_timer` — sets `running=true`, spawns `std::thread` that ticks every 1s. Emits an initial tick immediately for instant UI feedback. When a non-extendable part hits 0 → auto-advances to next part. When an extendable part hits 0 → enters `paused` overtime (keeps ticking into negative). When the last part finishes → stops and resets. Records full part duration on auto-complete when `track_time` is enabled.
+- `start_timer` — sets `running=true`, spawns `std::thread` that ticks every 1s. Emits an initial tick immediately for instant UI feedback. When a non-extendable part hits 0 → auto-advances to next part. When an extendable part hits 0 → enters `paused` overtime (keeps ticking into negative). When `manual_pause` is set, skips decrement and phase transitions. When the last part finishes → stops and resets. Records full part duration on auto-complete when `track_time` is enabled.
 - `stop_timer` — sets `running=false`, records partial tracked time (handles overtime correctly by only adding overtime seconds since the full duration was already recorded at the zero-transition), resets to first part, emits final tick
-- `continue_timer` — advances past an extendable part that is in overtime. Flushes accumulated overtime tracked seconds to the record. Errors if not paused.
+- `pause_timer` — sets `manual_pause=true` (freezes countdown). Works during normal running or overtime. Emits tick.
+- `resume_timer` — clears `manual_pause` (resumes countdown). Errors if not manually paused.
+- `next_part` — advances to next part in the current session (works whenever `running=true`: normal running, overtime, or manual pause). Records tracked time for the current part (elapsed or overtime accumulation). Uses existing `continue_advance()` helper. If last part: stops and resets. Clears `manual_pause`, `paused`, `overtime_tracked_seconds`. Emits tick.
+- `continue_timer` — kept for backward compat; delegates to same advance logic as `next_part`. Still requires `paused=true`.
 - `update_settings` — validates (1–5 sessions, 1–10 parts each, 1–120 min), generates UUIDs for sessions without one, persists to JSON file, resets display if not running. Falls back to first session if active UUID no longer exists. Accepts optional `shortcuts` param to update global shortcut bindings; re-registers shortcuts on change.
 - `switch_session` — switches active session by UUID (only when stopped)
 - `toggle_dock_mode` — toggles dock mode. Sets window to 360×72, always-on-top, undecorated, positioned at top-center of the primary monitor. Undocking restores 420×520 centered window with decorations. Emits `dock-mode-changed` event.
@@ -114,19 +117,22 @@ Pomodoro desktop clock built with Rust + Tauri v2. Vanilla HTML/CSS/JS frontend 
 
 ### Frontend (`ui/`)
 
-- `index.html` — timer display (`#timer`), phase indicator (`#phase`), session label (`#session-label`), dock button (`#dock-btn`), settings button (`#settings-btn`) both wrapped in `#controls` container, toggle button (`#toggle-btn`), continue button (`#continue-btn`, shown during overtime), session switcher arrows, settings panel overlay with tabbed Sessions/Shortcuts panels, Export/Import/Save/Cancel buttons
+- `index.html` — timer display (`#timer`), phase indicator (`#phase`), session label (`#session-label`), dock button (`#dock-btn`), settings button (`#settings-btn`) both wrapped in `#controls` container, button group (`#button-group`) with Start/Stop (`#toggle-btn`), Pause/Continue (`#pause-btn`), and Next Part (`#next-btn`), session switcher arrows, settings panel overlay with tabbed Sessions/Shortcuts panels, Export/Import/Save/Cancel buttons
 - `style.css` — dark theme (`#1a1a2e` bg), centered flexbox, `.phase-part-0` through `.phase-part-4` (5-colour index-based palette wrapping via modulo), `.overtime` turns timer red, Continue button (teal outline → solid on hover). `body.docked` class switches to compact horizontal layout (72px tall bar, larger fonts, most controls hidden). Settings tabs: `.settings-tab` with teal underline on `.active`. Shortcut editing: `.shortcut-key` with `.recording` pulse animation. `.btn-flash` provides teal feedback on Export/Import success.
-- `app.js` — uses `window.__TAURI__` (global Tauri API, enabled via `withGlobalTauri: true`). Calls `invoke()` for commands, `listen('timer-tick', ...)` and `listen('dock-mode-changed', ...)` for state updates. Tracks `activeSessionId`/`sessionIds` (ordered UUID list for prev/next navigation), `currentPartIndex`/`currentPartName`/`currentSessionName`/`isRunning`/`isPaused`/`isDocked`/`shortcutConfig` locally. `formatTime` handles negative seconds (overtime). `phaseClass(partIndex)` — index-based with 5-colour modulo. Beeps on session start (long), part transitions (triple), session end (long), and overtime entry (triple). `buildSettingsForm()` builds session/part cards with extendable + track-time checkboxes. `buildShortcutsForm()` builds click-to-record shortcut inputs; recording captures `e.code` and modifiers, stores internally as `CmdOrCtrl+Shift+KeyS` format, displays as `Ctrl/Cmd+Shift+S`. Settings panel uses `switchSettingsTab()` for Sessions/Shortcuts tab switching. Escape key closes the overlay via `closeSettings()`, which also calls `set_settings_open(false)` to re-enable global shortcuts. **Export:** serializes settings to JSON via `get_settings` and copies to clipboard with `navigator.clipboard.writeText()`. **Import:** reads JSON from clipboard via `navigator.clipboard.readText()`, validates client-side (accepts `{sessions: [...]}` wrapper or raw array; checks session names and part minutes 1–120), then applies via `update_settings`.
+- `app.js` — uses `window.__TAURI__` (global Tauri API, enabled via `withGlobalTauri: true`). Calls `invoke()` for commands, `listen('timer-tick', ...)` and `listen('dock-mode-changed', ...)` for state updates. Tracks `activeSessionId`/`sessionIds` (ordered UUID list for prev/next navigation), `currentPartIndex`/`currentPartName`/`currentSessionName`/`isRunning`/`isPaused`/`isManualPause`/`isDocked`/`shortcutConfig` locally. `formatTime` handles negative seconds (overtime). `phaseClass(partIndex)` — index-based with 5-colour modulo. Beeps on session start (long), part transitions (triple), session end (long), and overtime entry (triple). `buildSettingsForm()` builds session/part cards with extendable + track-time checkboxes. `buildShortcutsForm()` builds click-to-record shortcut inputs for toggle/pause/next_part; recording captures `e.code` and modifiers, stores internally as `CmdOrCtrl+Shift+KeyS` format, displays as `Ctrl/Cmd+Shift+S`. Settings panel uses `switchSettingsTab()` for Sessions/Shortcuts tab switching. Escape key closes the overlay via `closeSettings()`, which also calls `set_settings_open(false)` to re-enable global shortcuts. **Export:** serializes settings to JSON via `get_settings` and copies to clipboard with `navigator.clipboard.writeText()`. **Import:** reads JSON from clipboard via `navigator.clipboard.readText()`, validates client-side (accepts `{sessions: [...]}` wrapper or raw array; checks session names and part minutes 1–120), then applies via `update_settings`.
 
 ### Data flow
 
 ```
 User clicks Start → invoke('start_timer') → Rust sets running=true, emits initial tick immediately
-  → thread spawns: sleep 1s → lock state → decrement → check phase switch → unlock → emit('timer-tick', tick)
+  → thread spawns: sleep 1s → lock state → if manual_pause skip, else decrement → check phase switch → unlock → emit('timer-tick', tick)
 Frontend listen('timer-tick'): render(tick) → update DOM (part name/index, phase colour, button state)
+User clicks Pause → invoke('pause_timer') → Rust sets manual_pause=true → timer thread skips decrement
+User clicks Continue → invoke('resume_timer') → Rust clears manual_pause → timer thread resumes decrement
+User clicks Next → invoke('next_part') → Rust records elapsed time, advances to next part (or stops if last), emits tick
 User clicks Stop → invoke('stop_timer') → Rust sets running=false, records tracked time, resets, emits final tick
 Session switch → invoke('switch_session', { sessionId }) → Rust resolves UUID→index, updates active_session_id
-Global shortcut (e.g. Ctrl+Shift+S) → OS hotkey → plugin callback → Rust checks is_settings_open → calls start_timer/stop_timer/continue_timer → emits timer-tick → frontend renders
+Global shortcut (e.g. Ctrl+Shift+S) → OS hotkey → plugin callback → Rust checks is_settings_open → toggle: calls start_timer or stop_timer depending on state → emits timer-tick → frontend renders
 Settings open → invoke('set_settings_open', { open: true }) → Rust sets is_settings_open=true → global shortcuts suppressed
 Settings close → invoke('set_settings_open', { open: false }) → Rust sets is_settings_open=false → global shortcuts re-enabled
 ```
@@ -135,9 +141,10 @@ Settings close → invoke('set_settings_open', { open: false }) → Rust sets is
 
 ```
 Extendable part hits 0 → paused=true, timer keeps ticking into negative
-  → frontend shows negative time (red), Continue button appears, triple-beep alert
-User clicks Continue → invoke('continue_timer')
+  → frontend shows negative time (red), Next button available, triple-beep alert
+User clicks Next → invoke('next_part')
   → advances to next part (or stops if last), flushes tracked overtime to record
+User clicks Pause during overtime → invoke('pause_timer') → manual_pause=true, timer frozen
 User clicks Stop during overtime → records only the overtime seconds (full duration was
   already recorded at the zero-transition)
 ```

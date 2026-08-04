@@ -139,13 +139,33 @@ body {
   margin-bottom: 24px;
 }
 
-/* ---- Toggle button ---- */
+/* ---- Button group ---- */
+#button-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  min-height: 120px
+}
+
+#button-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+
+#button-row > button.hidden {
+  display: none;
+}
+
+/* ---- Toggle button (Start / Stop) ---- */
 #toggle-btn {
   font-size: 1.2rem;
   font-weight: 600;
   letter-spacing: 2px;
   text-transform: uppercase;
-  padding: 14px 52px;
+  padding: 14px 36px;
   border: none;
   border-radius: 40px;
   cursor: pointer;
@@ -166,27 +186,45 @@ body {
   background: #777;
 }
 
-/* ---- Continue button (overtime) ---- */
-#continue-btn {
+/* ---- Pause / Continue button ---- */
+#pause-btn {
   font-size: 1.1rem;
   font-weight: 600;
   letter-spacing: 2px;
   text-transform: uppercase;
-  padding: 12px 44px;
+  min-width: 160px;
+  padding: 12px 24px;
+  border: none;
+  border-radius: 40px;
+  cursor: pointer;
+  background: #ff9800;
+  color: #1a1a2e;
+  transition: background 0.2s, transform 0.1s;
+}
+#pause-btn:hover {
+  background: #f57c00;
+}
+#pause-btn:active {
+  transform: scale(0.96);
+}
+
+/* ---- Next Part button ---- */
+#next-btn {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 10px 20px;
   border: 2px solid #16c79a;
   border-radius: 40px;
   cursor: pointer;
   background: transparent;
   color: #16c79a;
-  margin-top: 12px;
   transition: background 0.2s, color 0.2s;
 }
-#continue-btn:hover {
+#next-btn:hover {
   background: #16c79a;
   color: #1a1a2e;
-}
-#continue-btn.hidden {
-  display: none;
 }
 
 /* ---- Overtime timer ---- */
@@ -545,8 +583,7 @@ body.docked #controls {
 body.docked #session-left,
 body.docked #session-right,
 body.docked #settings-btn,
-body.docked #toggle-btn,
-body.docked #continue-btn,
+body.docked #button-group,
 body.docked #daily-total {
   display: none;
 }
